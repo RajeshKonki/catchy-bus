@@ -7,26 +7,34 @@ part 'auth_response_model.g.dart';
 /// Represents the API response for login/register
 @JsonSerializable()
 class AuthResponseModel {
-  @JsonKey(name: 'access_token')
-  final String accessToken;
+  @JsonKey(name: 'token')
+  final String? accessToken;
 
   @JsonKey(name: 'refresh_token')
   final String? refreshToken;
 
   @JsonKey(name: 'user')
-  final UserModel user;
+  final UserModel? user;
 
   @JsonKey(name: 'token_type')
   final String? tokenType;
 
+  @JsonKey(name: 'multipleUsers')
+  final bool? multipleUsers;
+
+  @JsonKey(name: 'users')
+  final List<UserModel>? users;
+
   const AuthResponseModel({
-    required this.accessToken,
+    this.accessToken,
     this.refreshToken,
-    required this.user,
+    this.user,
     this.tokenType,
+    this.multipleUsers,
+    this.users,
   });
 
-  factory AuthResponseModel.fromJson(Map<String, dynamic> json) =>
+  factory AuthResponseModel.fromJson(Map<String, dynamic> json) => 
       _$AuthResponseModelFromJson(json);
 
   Map<String, dynamic> toJson() => _$AuthResponseModelToJson(this);

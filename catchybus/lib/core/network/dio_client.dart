@@ -1,6 +1,9 @@
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/api_constants.dart';
+import '../constants/app_constants.dart';
+import '../di/injection.dart';
 
 /// Dio client for making HTTP requests
 class DioClient {
@@ -31,10 +34,11 @@ class DioClient {
         InterceptorsWrapper(
           onRequest: (options, handler) {
             // Add auth token if available
-            // final token = getIt<SharedPreferences>().getString(AppConstants.keyAccessToken);
-            // if (token != null) {
-            //   options.headers['Authorization'] = 'Bearer $token';
-            // }
+            final prefs = getIt<SharedPreferences>();
+            final token = prefs.getString(AppConstants.keyAccessToken);
+            if (token != null) {
+              options.headers['Authorization'] = 'Bearer $token';
+            }
             return handler.next(options);
           },
           onError: (error, handler) {
@@ -105,6 +109,32 @@ class DioClient {
   }) async {
     try {
       final response = await _dio.put(
+        path,
+        data: data,
+        queryParameters: queryParameters,
+        options: options,
+        cancelToken: cancelToken,
+        onSendProgress: onSendProgress,
+        onReceiveProgress: onReceiveProgress,
+      );
+      return response;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // PATCH request
+  Future<Response> patch(
+    String path, {
+    dynamic data,
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+    CancelToken? cancelToken,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    try {
+      final response = await _dio.patch(
         path,
         data: data,
         queryParameters: queryParameters,

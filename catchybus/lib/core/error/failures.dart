@@ -55,6 +55,20 @@ class AuthenticationFailure extends Failure {
   });
 }
 
+/// Failure when multiple user accounts are found for a single phone number
+class MultipleUsersFailure extends Failure {
+  final List<dynamic> users; // Using List<dynamic> or List<UserEntity>
+  
+  const MultipleUsersFailure({
+    required super.message,
+    required this.users,
+    super.statusCode,
+  });
+
+  @override
+  List<Object?> get props => [...super.props, users];
+}
+
 /// Generic/Unknown failures
 class UnknownFailure extends Failure {
   const UnknownFailure({

@@ -1,15 +1,38 @@
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'core/di/injection.dart';
+import 'core/services/notification_service.dart';
 import 'config/routes/app_router.dart';
 import 'config/theme/app_theme.dart';
+import 'firebase_options.dart';
 
 void main() async {
+  // Ensure Flutter binds are ready for plugin calls
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ⚠️ FCM background handler MUST be registered before Firebase.initializeApp
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+  // Initialize Firebase with defensive check against race conditions
+  if (Firebase.apps.isEmpty) {
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+      print('🔥 Firebase Initialized successfully');
+    } catch (e) {
+      print('❌ Firebase Initialization Error: $e');
+    }
+  }
 
   // Initialize dependencies
   await initializeDependencies();
+
+  // Initialize Notification Service (foreground + token registration)
+  await PushNotificationService().initialize();
 
   runApp(const ProviderScope(child: MyApp()));
 }
@@ -28,8 +51,7 @@ class MyApp extends StatelessWidget {
           title: 'CatchyBus',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.lightTheme,
-          darkTheme: AppTheme.darkTheme,
-          themeMode: ThemeMode.system,
+          themeMode: ThemeMode.light,
           routerConfig: AppRouter.router,
         );
       },

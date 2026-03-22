@@ -18,3 +18,7 @@ class NoParams extends Equatable {
   @override
   List<Object?> get props => [];
 }
+
+abstract class StreamUseCase<T, Params> {
+  Stream<Either<Failure, T>> call(Params params);
+}

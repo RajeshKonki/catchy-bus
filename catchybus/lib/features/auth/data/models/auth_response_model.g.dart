@@ -7,16 +7,24 @@ part of 'auth_response_model.dart';
 // **************************************************************************
 
 AuthResponseModel _$AuthResponseModelFromJson(Map json) => AuthResponseModel(
-  accessToken: json['access_token'] as String,
+  accessToken: json['token'] as String?,
   refreshToken: json['refresh_token'] as String?,
-  user: UserModel.fromJson(Map<String, dynamic>.from(json['user'] as Map)),
+  user: json['user'] == null
+      ? null
+      : UserModel.fromJson(Map<String, dynamic>.from(json['user'] as Map)),
   tokenType: json['token_type'] as String?,
+  multipleUsers: json['multipleUsers'] as bool?,
+  users: (json['users'] as List<dynamic>?)
+      ?.map((e) => UserModel.fromJson(Map<String, dynamic>.from(e as Map)))
+      .toList(),
 );
 
 Map<String, dynamic> _$AuthResponseModelToJson(AuthResponseModel instance) =>
     <String, dynamic>{
-      'access_token': instance.accessToken,
+      'token': instance.accessToken,
       'refresh_token': instance.refreshToken,
-      'user': instance.user.toJson(),
+      'user': instance.user?.toJson(),
       'token_type': instance.tokenType,
+      'multipleUsers': instance.multipleUsers,
+      'users': instance.users?.map((e) => e.toJson()).toList(),
     };

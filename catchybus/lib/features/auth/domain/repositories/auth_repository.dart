@@ -7,8 +7,11 @@ import '../entities/user_entity.dart';
 abstract class AuthRepository {
   /// Login with email and password
   Future<Either<Failure, UserEntity>> login({
-    required String email,
-    required String password,
+    required String emailOrPhone,
+    String? password,
+    String? idToken,
+    required String role,
+    String? selectedUserId,
   });
 
   /// Register a new user
@@ -26,4 +29,8 @@ abstract class AuthRepository {
 
   /// Check if user is logged in
   Future<bool> isLoggedIn();
+  /// Update FCM token for push notifications
+  Future<Either<Failure, void>> updateFcmToken(String fcmToken);
+  /// Update notification settings
+  Future<Either<Failure, void>> updateNotificationSettings(Map<String, bool> settings);
 }

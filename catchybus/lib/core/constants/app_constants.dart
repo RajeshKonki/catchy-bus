@@ -10,6 +10,10 @@ class AppConstants {
   static const String keyUserId = 'user_id';
   static const String keyUserEmail = 'user_email';
   static const String keyIsLoggedIn = 'is_logged_in';
+  static const String keyUserData = 'user_data';
+  static const String keyUserPhone = 'user_phone';
+  static const String keyUserRole = 'user_role';
+  static const String keyIdToken = 'id_token';
   static const String keyThemeMode = 'theme_mode';
 
   // Pagination

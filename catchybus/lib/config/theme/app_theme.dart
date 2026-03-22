@@ -7,6 +7,7 @@ class AppColors {
     0xFFF9C300,
   ); // Bus body, brand identity
   static const Color deepBlue = Color(0xFF1E4FA3); // Primary text, headers
+  static const Color navigationBlue = Color(0xFF4285F4); // Map routes, navigation
   static const Color brightOrange = Color(0xFFF57C00); // Buttons, highlights
   static const Color locationRed = Color(0xFFE53935); // GPS pin, alerts
   static const Color darkCharcoal = Color(0xFF212121); // Body text, icons
