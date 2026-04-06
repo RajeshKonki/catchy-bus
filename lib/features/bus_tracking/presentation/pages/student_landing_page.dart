@@ -27,6 +27,7 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
   bool isGPSTracking = true;
   int _currentPage = 0;
   Timer? _timer;
+  String? _lastLoadedUserId;
 
   List<String> _bannerUrls = [];
 
@@ -40,6 +41,7 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
 
   void _loadBusDetails() {
     final user = ref.read(authProvider).user;
+    _lastLoadedUserId = user?.id;
     final busNumber = user?.busNumber ?? 'Bus No. 10';
     ref.read(busTrackingProvider.notifier).loadBusRoute(busNumber);
   }
@@ -205,6 +207,20 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Reload bus details whenever the active user switches (e.g. after switching
+    // students in the profile screen). busTrackingProvider is recreated by Riverpod
+    // when authProvider changes, resetting to initial state — so we must re-trigger
+    // the load here rather than relying solely on initState.
+    ref.listen<AuthState>(authProvider, (previous, next) {
+      final newUserId = next.user?.id;
+      if (newUserId != null && newUserId != _lastLoadedUserId) {
+        _lastLoadedUserId = newUserId;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _loadBusDetails();
+        });
+      }
+    });
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(

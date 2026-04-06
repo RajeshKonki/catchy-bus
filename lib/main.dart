@@ -27,7 +27,10 @@ void main() async {
 
       // Disable reCAPTCHA for testing
       if (kDebugMode) {
-        await FirebaseAuth.instance.setSettings(forceRecaptchaFlow: true);
+        await FirebaseAuth.instance.setSettings(
+          forceRecaptchaFlow: false,
+          appVerificationDisabledForTesting: true,
+        );
         print(
           '🛡️ Firebase Auth: App verification disabled for testing (reCAPTCHA removed)',
         );
