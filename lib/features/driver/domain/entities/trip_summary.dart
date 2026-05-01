@@ -5,6 +5,9 @@ class TripSummary {
   final DateTime endTime;
   final double? driverLat;
   final double? driverLng;
+  final String? routeId;
+  final String? routeName;
+  final bool isReverse;
 
   TripSummary({
     required this.duration,
@@ -13,6 +16,9 @@ class TripSummary {
     required this.endTime,
     this.driverLat,
     this.driverLng,
+    this.routeId,
+    this.routeName,
+    this.isReverse = false,
   });
 
   String get durationString {

@@ -19,6 +19,15 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   final Color _fallbackBgColor = AppColors.primaryYellow.withOpacity(0.1);
 
   @override
+  void initState() {
+    super.initState();
+    // Refresh profile data when opening the profile page
+    Future.microtask(() {
+      ref.read(authProvider.notifier).refreshProfile();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
     final user = authState.user;
@@ -36,7 +45,9 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             Container(
               color: Colors.black.withOpacity(0.3),
               child: const Center(
-                child: CircularProgressIndicator(color: AppColors.primaryYellow),
+                child: CircularProgressIndicator(
+                  color: AppColors.primaryYellow,
+                ),
               ),
             ),
         ],
@@ -44,12 +55,16 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     );
   }
 
-  Widget _buildBody(BuildContext context, AuthState authState, UserEntity user) {
+  Widget _buildBody(
+    BuildContext context,
+    AuthState authState,
+    UserEntity user,
+  ) {
     if (authState.error != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(authState.error!)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(authState.error!)));
       });
     }
 
@@ -86,7 +101,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     width: double.infinity,
                     decoration: BoxDecoration(
                       color: _fallbackBgColor,
-                      image: user.collegeImageUrl != null &&
+                      image:
+                          user.collegeImageUrl != null &&
                               user.collegeImageUrl!.isNotEmpty
                           ? DecorationImage(
                               image: NetworkImage(user.collegeImageUrl!),
@@ -96,24 +112,28 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     ),
                   ),
                   // Logo Overlay from College Image or hidden if not provided
-                  if (user.collegeImageUrl != null && user.collegeImageUrl!.isNotEmpty)
+                  if (user.collegeImageUrl != null &&
+                      user.collegeImageUrl!.isNotEmpty)
                     Positioned(
                       top: 20,
                       right: 20,
                       child: Container(
-                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                         decoration: BoxDecoration(
-                           color: Colors.white.withOpacity(0.8),
-                           borderRadius: BorderRadius.circular(4),
-                         ),
-                         child: Text(
-                           user.college ?? '',
-                           style: TextStyle(
-                             color: AppColors.deepBlue,
-                             fontWeight: FontWeight.bold,
-                             fontSize: 12,
-                           ),
-                         ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.8),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          user.college ?? '',
+                          style: TextStyle(
+                            color: AppColors.deepBlue,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
                       ),
                     ),
                   // Profile Pictures Row (now pinned to the bottom of the larger Stack)
@@ -126,10 +146,19 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
-                          ...((user.accounts != null && user.accounts!.isNotEmpty) ? user.accounts! : [user]).map((account) => Padding(
-                              padding: const EdgeInsets.only(right: 12),
-                              child: _buildAvatar(account, account.id == user.id),
-                            )),
+                          ...((user.accounts != null &&
+                                      user.accounts!.isNotEmpty)
+                                  ? user.accounts!
+                                  : [user])
+                              .map(
+                                (account) => Padding(
+                                  padding: const EdgeInsets.only(right: 12),
+                                  child: _buildAvatar(
+                                    account,
+                                    account.id == user.id,
+                                  ),
+                                ),
+                              ),
                         ],
                       ),
                     ),
@@ -180,13 +209,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: Colors.grey.shade200),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.02),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
                 ),
                 child: Column(
                   children: [
@@ -199,10 +221,26 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     _buildDetailItem(
                       icon: Icons.map,
                       label: 'Preferred Route',
-                      value: user.busNumber != null 
-                          ? 'Bus ${user.busNumber}' 
+                      value: user.busNumber != null
+                          ? 'Bus ${user.busNumber}'
                           : 'Not Assigned',
                     ),
+                    if (user.department != null && user.department!.isNotEmpty) ...[
+                      Divider(height: 1, color: Colors.grey.shade200),
+                      _buildDetailItem(
+                        icon: Icons.business,
+                        label: 'Department',
+                        value: user.department!,
+                      ),
+                    ],
+                    if (user.year != null && user.year!.isNotEmpty) ...[
+                      Divider(height: 1, color: Colors.grey.shade200),
+                      _buildDetailItem(
+                        icon: Icons.calendar_today,
+                        label: 'Year',
+                        value: user.year!,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -235,13 +273,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: Colors.grey.shade200),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.02),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
                 ),
                 child: Column(
                   children: [
@@ -277,7 +308,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       ),
     );
   }
-
 
   Widget _buildSettingItem({
     required IconData icon,
@@ -334,13 +364,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             color: isActive ? AppColors.primaryYellow : Colors.grey.shade300,
             width: isActive ? 4 : 1,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 8,
-              spreadRadius: 1,
-            ),
-          ],
         ),
         padding: const EdgeInsets.all(2),
         child: ClipRRect(
@@ -563,92 +586,92 @@ class _HelpSupportModalState extends ConsumerState<HelpSupportModal> {
                 style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
               ),
               const SizedBox(height: 24),
-                      TextFormField(
-                        controller: _subjectController,
-                        decoration: InputDecoration(
-                          labelText: 'Subject',
-                          hintText: 'e.g., Bus delay, App issue',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
+              TextFormField(
+                controller: _subjectController,
+                decoration: InputDecoration(
+                  labelText: 'Subject',
+                  hintText: 'e.g., Bus delay, App issue',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  filled: true,
+                  fillColor: const Color(0xFFF8FAFC),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter a subject';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _queryController,
+                maxLines: 5,
+                decoration: InputDecoration(
+                  labelText: 'Message',
+                  hintText: 'Details about your problem...',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  filled: true,
+                  fillColor: const Color(0xFFF8FAFC),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please describe your issue';
+                  }
+                  if (value.length < 10) {
+                    return 'Description is too short';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: isLoading
+                    ? null
+                    : () {
+                        if (_formKey.currentState!.validate()) {
+                          ref
+                              .read(supportProvider.notifier)
+                              .sendQuery(
+                                query: _queryController.text,
+                                subject: _subjectController.text,
+                                email: user?.email,
+                              );
+                        }
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.brightOrange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
+                ),
+                child: isLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
                           ),
-                          filled: true,
-                          fillColor: const Color(0xFFF8FAFC),
                         ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please enter a subject';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: _queryController,
-                        maxLines: 5,
-                        decoration: InputDecoration(
-                          labelText: 'Message',
-                          hintText: 'Details about your problem...',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                          filled: true,
-                          fillColor: const Color(0xFFF8FAFC),
+                      )
+                    : const Text(
+                        'Submit Query',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
                         ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please describe your issue';
-                          }
-                          if (value.length < 10) {
-                            return 'Description is too short';
-                          }
-                          return null;
-                        },
                       ),
-                      const SizedBox(height: 24),
-                      ElevatedButton(
-                        onPressed: isLoading
-                            ? null
-                            : () {
-                                if (_formKey.currentState!.validate()) {
-                                  ref
-                                      .read(supportProvider.notifier)
-                                      .sendQuery(
-                                        query: _queryController.text,
-                                        subject: _subjectController.text,
-                                        email: user?.email,
-                                      );
-                                }
-                              },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.brightOrange,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 18),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 0,
-                        ),
-                        child: isLoading
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
-                                  ),
-                                ),
-                              )
-                            : const Text(
-                                'Submit Query',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                      ),
+              ),
               const SizedBox(height: 16),
             ],
           ),

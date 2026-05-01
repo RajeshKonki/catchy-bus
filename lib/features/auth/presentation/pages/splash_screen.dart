@@ -48,10 +48,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
       duration: const Duration(milliseconds: 700),
     );
     _contentFade = CurvedAnimation(
-        parent: _contentController, curve: Curves.easeOut);
+      parent: _contentController,
+      curve: Curves.easeOut,
+    );
     _contentScale = Tween<double>(begin: 0.85, end: 1.0).animate(
-      CurvedAnimation(
-          parent: _contentController, curve: Curves.easeOutBack),
+      CurvedAnimation(parent: _contentController, curve: Curves.easeOutBack),
     );
 
     // 3. Exit: content slides up & fades out
@@ -62,9 +63,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     _exitSlide = Tween<double>(begin: 0.0, end: -1.0).animate(
       CurvedAnimation(parent: _exitController, curve: Curves.easeInCubic),
     );
-    _exitFade = Tween<double>(begin: 1.0, end: 0.0).animate(
-      CurvedAnimation(parent: _exitController, curve: Curves.easeIn),
-    );
+    _exitFade = Tween<double>(
+      begin: 1.0,
+      end: 0.0,
+    ).animate(CurvedAnimation(parent: _exitController, curve: Curves.easeIn));
 
     _startSequence();
   }
@@ -122,7 +124,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
             animation: Listenable.merge([_waveSlide, _exitSlide]),
             builder: (context, _) {
               final entranceOffset = _waveSlide.value * size.height * 0.45;
-              final exitOffset = _exitController.isAnimating || _exitController.isCompleted
+              final exitOffset =
+                  _exitController.isAnimating || _exitController.isCompleted
                   ? _exitSlide.value * size.height * 0.45
                   : 0.0;
               return Transform.translate(
@@ -139,14 +142,15 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
           AnimatedBuilder(
             animation: Listenable.merge([_exitSlide, _exitFade]),
             builder: (context, child) {
-              final slideOffset = (_exitController.isAnimating ||
-                      _exitController.isCompleted)
+              final slideOffset =
+                  (_exitController.isAnimating || _exitController.isCompleted)
                   ? _exitSlide.value * size.height * 0.35
                   : 0.0;
               return Transform.translate(
                 offset: Offset(0, slideOffset),
                 child: Opacity(
-                  opacity: (_exitController.isAnimating ||
+                  opacity:
+                      (_exitController.isAnimating ||
                           _exitController.isCompleted)
                       ? _exitFade.value
                       : 1.0,

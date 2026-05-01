@@ -18,7 +18,15 @@ import '../../../../core/services/notification_service.dart';
 class BusTrackingHomePage extends ConsumerStatefulWidget {
   final String? busNumber;
   final String? studentName;
-  const BusTrackingHomePage({super.key, this.busNumber, this.studentName});
+  final bool? isReverse;
+  final String? routeId;
+  const BusTrackingHomePage({
+    super.key,
+    this.busNumber,
+    this.studentName,
+    this.isReverse,
+    this.routeId,
+  });
 
   @override
   ConsumerState<BusTrackingHomePage> createState() =>
@@ -68,7 +76,11 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(busTrackingProvider.notifier).startTracking(selectedBus);
+      ref.read(busTrackingProvider.notifier).startTracking(
+        selectedBus,
+        initialIsReverse: widget.isReverse,
+        routeId: widget.routeId,
+      );
     });
   }
 
@@ -132,6 +144,17 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
     });
 
     try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _showTopNotification('Location permissions are denied');
+        return;
+      }
+
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
@@ -191,7 +214,7 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
         case StopType.futureStop:
           hue = BitmapDescriptor.hueRed;
         case StopType.skippedStop:
-          hue = BitmapDescriptor.hueRed; // or any other hue
+          hue = BitmapDescriptor.hueViolet;
       }
 
       markers.add(
@@ -212,33 +235,31 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
     }
 
     // Bus position marker (animated rotation)
-    if (busRoute.isTripActive) {
-      markers.add(
-        Marker(
-          markerId: const MarkerId('bus_position'),
-          position: LatLng(
-            busRoute.busPosition.latitude,
-            busRoute.busPosition.longitude,
-          ),
-          rotation: busRoute.busPosition.bearing,
-          anchor: const Offset(0.5, 0.5),
-          flat: true, // Make it follow map rotation smoothly
-          icon:
-              _busIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-          onTap: () => _openDirections(
-            busRoute.busPosition.latitude,
-            busRoute.busPosition.longitude,
-            'Bus ${busRoute.busNumber}',
-          ),
-          infoWindow: InfoWindow(
-            title: 'Bus: ${busRoute.busNumber}',
-            snippet: 'Current Position',
-          ),
-          zIndex: 2, // Keep bus on top
+    markers.add(
+      Marker(
+        markerId: const MarkerId('bus_position'),
+        position: LatLng(
+          busRoute.busPosition.latitude,
+          busRoute.busPosition.longitude,
         ),
-      );
-    }
+        rotation: busRoute.busPosition.bearing,
+        anchor: const Offset(0.5, 0.5),
+        flat: true, // Make it follow map rotation smoothly
+        icon:
+            _busIcon ??
+            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+        onTap: () => _openDirections(
+          busRoute.busPosition.latitude,
+          busRoute.busPosition.longitude,
+          'Bus ${busRoute.busNumber}',
+        ),
+        infoWindow: InfoWindow(
+          title: 'Bus: ${busRoute.busNumber}',
+          snippet: 'Current Position',
+        ),
+        zIndex: 2, // Keep bus on top
+      ),
+    );
 
     return markers;
   }
@@ -271,6 +292,10 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
       points = busRoute.stops
           .map((stop) => LatLng(stop.latitude, stop.longitude))
           .toList();
+    }
+
+    if (busRoute.isReverse) {
+      points = points.reversed.toList();
     }
 
     if (points.isEmpty) return {};
@@ -320,14 +345,14 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
       ...points.sublist(splitIndex + 1),
     ];
 
-    // Blue polyline for the already-traveled portion (Blue line ends at the bus)
+    // Gray polyline for the already-traveled portion (Finished segment)
     if (passedPoints.length >= 2) {
       polylines.add(
         Polyline(
           polylineId: const PolylineId('bus_route_passed'),
           points: passedPoints,
-          color: AppColors.navigationBlue,
-          width: 8,
+          color: const Color(0xFFE0E0E0), // Neutral gray for passed
+          width: 6,
           jointType: JointType.round,
           endCap: Cap.roundCap,
           startCap: Cap.roundCap,
@@ -335,14 +360,14 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
       );
     }
 
-    // Gray polyline for the remaining route ahead
+    // Blue polyline for the remaining route ahead
     if (aheadPoints.length >= 2) {
       polylines.add(
         Polyline(
           polylineId: const PolylineId('bus_route_ahead'),
           points: aheadPoints,
-          color: const Color(0xFFE0E0E0), // Light neutral gray
-          width: 6,
+          color: AppColors.navigationBlue, // Vibrant blue for upcoming
+          width: 8,
           jointType: JointType.round,
           endCap: Cap.roundCap,
           startCap: Cap.roundCap,
@@ -374,6 +399,22 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
 
     // Listen to tracking state: update map camera AND drive transit animation
     ref.listen(busTrackingProvider, (previous, next) {
+      // ── Trip Completion Detection ──
+      // If trip was active and is now inactive, show summary and go back
+      final bool wasActive = previous?.maybeWhen(
+            loaded: (r) => r.isTripActive,
+            orElse: () => false,
+          ) ??
+          false;
+      final bool isNowInactive = next.maybeWhen(
+        loaded: (r) => !r.isTripActive,
+        orElse: () => false,
+      );
+
+      if (wasActive && isNowInactive && mounted) {
+        _showTripCompletedDialog();
+      }
+
       next.maybeWhen(
         loaded: (busRoute) {
           if (mounted) {
@@ -411,7 +452,38 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
       body: trackingState.when(
         initial: () => const Center(child: CircularProgressIndicator()),
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (message) => Center(child: Text('Error: $message')),
+        error: (message) => Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.wifi_off_rounded, size: 64, color: Colors.grey),
+                const SizedBox(height: 16),
+                Text(
+                  'Connection Error',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () {
+                    final busNo = widget.busNumber ?? '10';
+                    ref.read(busTrackingProvider.notifier).loadBusRoute(busNo);
+                  },
+                  child: const Text('Try Again'),
+                ),
+              ],
+            ),
+          ),
+        ),
         loaded: (busRoute) => isMapView
             ? Stack(
                 children: [
@@ -431,7 +503,7 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
                             onPressed: () => _centerToBus(busRoute),
                             backgroundColor: Colors.white,
                             foregroundColor: AppColors.brightOrange,
-                            elevation: 4,
+                            elevation: 0,
                             heroTag: 'refresh_bus',
                             child: const Icon(Icons.refresh),
                           ),
@@ -442,7 +514,7 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
                           onPressed: _centerToUser,
                           backgroundColor: Colors.white,
                           foregroundColor: AppColors.deepBlue,
-                          elevation: 4,
+                          elevation: 0,
                           heroTag: 'center_user',
                           child: const Icon(Icons.my_location),
                         ),
@@ -540,13 +612,6 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
               decoration: BoxDecoration(
                 color: AppColors.deepBlue,
                 borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
               ),
               child: Row(
                 children: [
@@ -700,7 +765,7 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
   }
 
   Widget _buildRouteListView(BusRoute busRoute) {
-    final stopsData = busRoute.stops;
+    final stopsData = busRoute.stops; // provider already reverses stops if isReverse is true
     final bool isInTransit =
         busRoute.isTripActive && busRoute.transitFromStopIndex >= 0;
     final int transitFrom = busRoute.transitFromStopIndex;
@@ -748,7 +813,11 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
           final isLast = index == stopsData.length - 1;
           final isPassed = stop.type == StopType.passedStop;
           final isAtStop = !isInTransit && index == atStopIndex;
-          final isTransitSegment = isInTransit && index == transitFrom;
+          
+          final visualSegmentIdx = busRoute.isReverse 
+              ? (stopsData.length - 1 - transitFrom) 
+              : transitFrom;
+          final isTransitSegment = isInTransit && index == visualSegmentIdx;
 
           return _buildStopItem(
             stop: stop,
@@ -763,6 +832,7 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
             atStopIndex: atStopIndex,
             index: index,
             studentStopName: studentStopName,
+            isReverse: busRoute.isReverse,
           );
         },
       ),
@@ -782,6 +852,7 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
     required int? atStopIndex,
     required int index,
     String? studentStopName,
+    required bool isReverse,
   }) {
     final isNext = stop.type == StopType.nextStop;
 
@@ -807,6 +878,12 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
           ),
         ),
         onEnd: () {},
+      );
+    } else if (stop.type == StopType.skippedStop) {
+      iconWidget = const Icon(
+        Icons.cancel,
+        color: Colors.red,
+        size: 26,
       );
     } else if (isPassed || (isInTransit && index <= transitFrom)) {
       iconWidget = const Icon(
@@ -882,15 +959,17 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
                         // Bus is on this segment — animate smoothly over 3s linearly based on GPS progression
                         ? TweenAnimationBuilder<double>(
                             key: ValueKey<int>(transitFrom),
-                            tween: Tween<double>(
-                              // Start from the last known GPS position for this
-                              // segment so each update plays an incremental step
-                              // (not a big sweep from 0 every time).
-                              begin: (_prevTransitFrom == transitFrom)
-                                  ? _prevTransitProg
-                                  : 0.03,
-                              end: transitProg.clamp(0.03, 0.97),
-                            ),
+                              tween: Tween<double>(
+                                // Start from the last known GPS position for this
+                                // segment so each update plays an incremental step
+                                // (not a big sweep from 0 every time).
+                                begin: (_prevTransitFrom == transitFrom)
+                                    ? _prevTransitProg
+                                    : 0.03,
+                                  // transitProg is already flipped by updateLocalPosition in the provider
+                                  // if isReverse is true, so we just use it directly.
+                                  end: transitProg.clamp(0.03, 0.97),
+                              ),
                             duration: const Duration(milliseconds: 2500),
                             curve: Curves.linear,
                             builder: (context, animProg, _) {
@@ -978,15 +1057,6 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
                                 color: AppColors.primaryYellow.withOpacity(0.5),
                               )
                             : null),
-                  boxShadow: isStudentAssignedHere
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFFFFCA28).withOpacity(0.25),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : null,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1248,13 +1318,6 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.grey[300]!, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1294,6 +1357,48 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
         }
       }
     }
+  }
+
+  void _showTripCompletedDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Column(
+          children: const [
+            Icon(Icons.check_circle, color: Colors.green, size: 48),
+            SizedBox(height: 16),
+            Text('Trip Completed!'),
+          ],
+        ),
+        content: const Text(
+          'Your bus has reached its destination. The tracking for this trip has finished.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 16),
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Close dialog
+                context.goNamed('student-landing'); // Go back to landing page
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.deepBlue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: const Text('GO BACK'),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _triggerAlarm(String stopName, int eta) {
@@ -1594,6 +1699,28 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
                                     MainAxisAlignment.spaceBetween,
                                 children: [
                                   const Text(
+                                    'Scheduled Arrival:',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                  Text(
+                                    scheduledTime!,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.darkCharcoal,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text(
                                     'Alarm will trigger at:',
                                     style: TextStyle(
                                       fontSize: 13,
@@ -1810,13 +1937,6 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 4,
-              offset: const Offset(0, 1),
-            ),
-          ],
         ),
         child: Icon(icon, color: iconColor ?? AppColors.darkCharcoal, size: 20),
       ),
@@ -1840,13 +1960,6 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1858,14 +1971,30 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                selectedBus,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.darkCharcoal,
-                  fontSize: 15,
-                ),
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    selectedBus,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.darkCharcoal,
+                      fontSize: 15,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (ref.watch(busTrackingProvider).maybeWhen(loaded: (r) => r.isReverse, orElse: () => false))
+                    Text(
+                      'Return Trip',
+                      style: TextStyle(
+                        color: AppColors.brightOrange,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 4),
@@ -1960,35 +2089,82 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
     // Distance: cumulative route distance from bus → each stop in sequence → targetStop
     double? displayDistanceKm;
     if (displayStop != null) {
-      final targetIdx = busRoute.stops.indexWhere(
-        (s) =>
-            s.name.trim().toLowerCase() ==
-            displayStop!.name.trim().toLowerCase(),
-      );
+      // ── ULTRA-ACCURATE DISTANCE CALCULATION (using routePath) ────────────
+      if (busRoute.routePath.isNotEmpty) {
+        final busLat = busRoute.busPosition.latitude;
+        final busLng = busRoute.busPosition.longitude;
+        final targetLat = displayStop.latitude;
+        final targetLng = displayStop.longitude;
 
-      double totalM = 0;
-      double prevLat = busRoute.busPosition.latitude;
-      double prevLng = busRoute.busPosition.longitude;
+        // 1. Find closest route-path index to the BUS
+        int busPathIdx = 0;
+        double minBusDist = double.infinity;
+        for (int i = 0; i < busRoute.routePath.length; i++) {
+          final p = busRoute.routePath[i];
+          final d = Geolocator.distanceBetween(busLat, busLng, p.latitude, p.longitude);
+          if (d < minBusDist) {
+            minBusDist = d;
+            busPathIdx = i;
+          }
+        }
 
-      for (int i = 0; i <= targetIdx; i++) {
-        final stop = busRoute.stops[i];
-        if (stop.type == StopType.passedStop) continue;
+        // 2. Find closest route-path index to the TARGET STOP
+        int targetPathIdx = 0;
+        double minTargetDist = double.infinity;
+        for (int i = 0; i < busRoute.routePath.length; i++) {
+          final p = busRoute.routePath[i];
+          final d = Geolocator.distanceBetween(targetLat, targetLng, p.latitude, p.longitude);
+          if (d < minTargetDist) {
+            minTargetDist = d;
+            targetPathIdx = i;
+          }
+        }
 
-        totalM += Geolocator.distanceBetween(
-          prevLat,
-          prevLng,
-          stop.latitude,
-          stop.longitude,
+        // 3. Sum segments between busPathIdx and targetPathIdx
+        double totalM = 0;
+        if (busPathIdx < targetPathIdx) {
+          for (int i = busPathIdx; i < targetPathIdx; i++) {
+            final p1 = busRoute.routePath[i];
+            final p2 = busRoute.routePath[i+1];
+            totalM += Geolocator.distanceBetween(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
+          }
+          displayDistanceKm = totalM / 1000.0;
+        } else {
+          // Bus is already at or past the stop (according to polyline)
+          displayDistanceKm = 0.05; // 50m minimum
+        }
+      } 
+      
+      // ── FALLBACK DISTANCE CALCULATION (waypoint-based) ────────────────────
+      if (displayDistanceKm == null) {
+        final targetIdx = busRoute.stops.indexWhere(
+          (s) => s.name.trim().toLowerCase() == displayStop!.name.trim().toLowerCase(),
         );
-        prevLat = stop.latitude;
-        prevLng = stop.longitude;
-        if (i == targetIdx) break;
+
+        double totalM = 0;
+        double prevLat = busRoute.busPosition.latitude;
+        double prevLng = busRoute.busPosition.longitude;
+
+        for (int i = 0; i <= targetIdx; i++) {
+          final stop = busRoute.stops[i];
+          if (stop.type == StopType.passedStop) continue;
+
+          totalM += Geolocator.distanceBetween(prevLat, prevLng, stop.latitude, stop.longitude);
+          prevLat = stop.latitude;
+          prevLng = stop.longitude;
+          if (i == targetIdx) break;
+        }
+        displayDistanceKm = totalM / 1000.0;
       }
-      displayDistanceKm = totalM / 1000.0;
     }
 
-    // ETA: prefer per-stop estimatedArrivalMinutes, fallback to route-level
-    final int? stopEtaMin = displayStop?.estimatedArrivalMinutes;
+    // ETA: prefer per-stop estimatedArrivalMinutes, but calculate a dynamic one based on distance
+    // Average bus speed in city ~25 km/h -> 0.416 km/min
+    final int? liveEtaMin = displayDistanceKm != null 
+        ? (displayDistanceKm / 0.416).ceil().clamp(1, 120) 
+        : null;
+        
+    final int? stopEtaMin = liveEtaMin ?? displayStop?.estimatedArrivalMinutes;
 
     // Check if the current student is already boarded
     final bool studentIsBoarded = () {
@@ -2013,8 +2189,8 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
     final String distText = studentIsBoarded
         ? 'Safe Journey!'
         : (displayDistanceKm != null
-              ? '${displayDistanceKm.toStringAsFixed(2)} km away'
-              : '${distance.toStringAsFixed(2)} km away');
+              ? '${UIHelpers.formatDistance(displayDistanceKm)} away'
+              : '${UIHelpers.formatDistance(distance)} away');
 
     // Label: show which stop we're measuring to
     final String arrivalLabel = studentIsBoarded
@@ -2023,6 +2199,7 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
               ? 'Arriving at ${displayStop.name.split(' ').take(3).join(' ')}${isRouteFallback ? ' (next)' : ''}'
               : 'Arriving in');
 
+    // Build the bottom action bar with ETA and Distance
     return Container(
       margin: EdgeInsets.zero,
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
@@ -2032,13 +2209,6 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
           topLeft: Radius.circular(32),
           topRight: Radius.circular(32),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.12),
-            blurRadius: 24,
-            offset: const Offset(0, -4),
-          ),
-        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2173,13 +2343,45 @@ class _BusTrackingHomePageState extends ConsumerState<BusTrackingHomePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      arrivalLabel,
-                      style: const TextStyle(
-                        color: Colors.grey,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            arrivalLabel,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (busRoute.isReverse) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.brightOrange.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.swap_horiz, color: AppColors.brightOrange, size: 10),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'RETURN TRIP',
+                                  style: TextStyle(
+                                    color: AppColors.brightOrange,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 4),
                     FittedBox(
@@ -2686,13 +2888,6 @@ class _BusSelectorBottomSheetState
           bottomLeft: Radius.circular(20),
           bottomRight: Radius.circular(20),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          ),
-        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3092,7 +3287,7 @@ class _BusSelectorBottomSheetState
                                         ),
                                         const SizedBox(width: 8),
                                         Text(
-                                          '${bus.distance!.toStringAsFixed(2)} km away',
+                                          '${UIHelpers.formatDistance(bus.distance)} away',
                                           style: const TextStyle(
                                             fontSize: 12,
                                             color: Colors.grey,

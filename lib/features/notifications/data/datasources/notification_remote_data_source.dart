@@ -5,6 +5,8 @@ abstract class NotificationRemoteDataSource {
   Future<List<NotificationModel>> getNotifications({String? phoneNumber});
   Future<void> markAsRead(String notificationId);
   Future<void> markAllAsRead();
+  Future<void> deleteNotification(String notificationId);
+  Future<void> deleteAllNotifications();
 }
 
 class NotificationRemoteDataSourceImpl implements NotificationRemoteDataSource {
@@ -35,5 +37,15 @@ class NotificationRemoteDataSourceImpl implements NotificationRemoteDataSource {
   @override
   Future<void> markAllAsRead() async {
     await dioClient.patch('/notifications/read-all');
+  }
+
+  @override
+  Future<void> deleteNotification(String notificationId) async {
+    await dioClient.delete('/notifications/$notificationId');
+  }
+
+  @override
+  Future<void> deleteAllNotifications() async {
+    await dioClient.delete('/notifications/all');
   }
 }

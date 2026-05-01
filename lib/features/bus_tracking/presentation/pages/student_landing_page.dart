@@ -82,32 +82,52 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
       
       // If trip is ACTIVE, just push right away since the route is decided by active trip anyway
       final trips = (data['trips'] as List?) ?? [];
-      final isTripActive = trips.isNotEmpty && trips[0]['status'] == 'STARTED';
+      final activeTrips = trips.where((t) => t['status'] == 'STARTED').toList();
+      final bool isTripActive = activeTrips.isNotEmpty;
       
       final busRoutesRaw = data['busRoutes'] as List? ?? [];
       final validRoutes = busRoutesRaw.where((br) => br is Map && br['route'] is Map).toList();
 
-      if (isTripActive || validRoutes.length <= 1) {
-        if (validRoutes.length == 1 && !isTripActive) {
-           final routeId = (validRoutes.first as Map)['routeId']?.toString();
-           if (routeId != null) {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setString('last_selected_route_id', routeId);
-           }
-        }
-        
+      if (validRoutes.isEmpty) {
         if (!mounted) return;
         context.push(
           AppRouter.busTracking,
           extra: {
             'busNumber': busNumber,
             'studentName': studentName,
+            'isReverse': false,
           },
         );
         return;
       }
 
-      // Show bottom sheet
+      // Generate Forward and Return options for every valid route
+      final List<Map<String, dynamic>> routeOptions = [];
+      for (var item in validRoutes) {
+        final routeObj = item['route'] as Map;
+        final routeId = item['routeId']?.toString();
+        final routeName = routeObj['name']?.toString() ?? 'Unnamed Route';
+        final start = routeObj['startPoint']?.toString() ?? 'Start';
+        final end = routeObj['endPoint']?.toString() ?? 'End';
+
+        // Forward Option
+        routeOptions.add({
+          'routeId': routeId,
+          'title': '$routeName (Forward)',
+          'subtitle': '$start ➔ $end',
+          'isReverse': false,
+        });
+
+        // Return Option
+        routeOptions.add({
+          'routeId': routeId,
+          'title': '$routeName (Return)',
+          'subtitle': '$end ➔ $start',
+          'isReverse': true,
+        });
+      }
+
+      // Show bottom sheet with ALL available routes (Forward/Reverse)
       if (!mounted) return;
       showModalBottomSheet(
         context: context,
@@ -134,15 +154,12 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
                   child: ListView.separated(
                     shrinkWrap: true,
                     padding: const EdgeInsets.symmetric(horizontal: 20),
-                    itemCount: validRoutes.length,
+                    itemCount: routeOptions.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
                     itemBuilder: (context, index) {
-                      final item = validRoutes[index] as Map;
-                      final routeObj = item['route'] as Map;
-                      final routeId = item['routeId']?.toString();
-                      final routeName = routeObj['name']?.toString() ?? 'Unnamed Route';
-                      final start = routeObj['startPoint']?.toString();
-                      final end = routeObj['endPoint']?.toString();
+                      final option = routeOptions[index];
+                      final routeId = option['routeId'];
+                      final isReverse = option['isReverse'] as bool;
                       
                       return ListTile(
                         onTap: () async {
@@ -157,6 +174,8 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
                               extra: {
                                 'busNumber': busNumber,
                                 'studentName': studentName,
+                                'isReverse': isReverse,
+                                'routeId': routeId,
                               },
                             );
                           }
@@ -167,17 +186,18 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
                           side: BorderSide(color: Colors.grey.shade200),
                         ),
                         leading: Container(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: AppColors.primaryYellow.withOpacity(0.2),
+                            color: AppColors.lightOrange,
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: const Icon(Icons.route, color: AppColors.brightOrange),
+                          child: Icon(
+                            isReverse ? Icons.keyboard_return : Icons.route, 
+                            color: AppColors.brightOrange
+                          ),
                         ),
-                        title: Text(routeName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: (start != null && end != null) 
-                            ? Text('$start ➔ $end', style: TextStyle(color: Colors.grey.shade600, fontSize: 12))
-                            : null,
+                        title: Text(option['title'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text(option['subtitle'], style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                       );
                     },
                   ),
@@ -196,6 +216,94 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
         SnackBar(content: Text('Failed to load bus routes: $e')),
       );
     }
+  }
+
+  void _showTripSelectionSheet(BuildContext context, String busNumber, String studentName, List<dynamic> activeTrips) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Text(
+                  'Multiple Trips Active',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.darkCharcoal,
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Text(
+                  'Please select which trip direction you would like to track.',
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: activeTrips.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    final trip = activeTrips[index];
+                    final isReverse = trip['isReverse'] == true || trip['is_reverse'] == true;
+                    final routeName = trip['routeName'] ?? (isReverse ? 'Return Trip' : 'Morning Trip');
+                    
+                    return ListTile(
+                      onTap: () {
+                        Navigator.pop(sheetContext); // Close sheet
+                        context.push(
+                          AppRouter.busTracking,
+                          extra: {
+                            'busNumber': busNumber,
+                            'studentName': studentName,
+                            'isReverse': isReverse,
+                          },
+                        );
+                      },
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isReverse ? AppColors.brightOrange.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          isReverse ? Icons.home : Icons.school,
+                          color: isReverse ? AppColors.brightOrange : Colors.blue,
+                        ),
+                      ),
+                      title: Text(routeName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text(
+                        isReverse ? 'Heading towards Residential Areas' : 'Heading towards College',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -350,13 +458,6 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -562,13 +663,6 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 4,
-              offset: const Offset(0, 1),
-            ),
-          ],
         ),
         child: Icon(icon, color: iconColor ?? AppColors.deepBlue, size: 20),
       ),
@@ -725,13 +819,6 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: Colors.grey.shade300, width: 1),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.04),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
                   ),
                   child: Column(
                     children: [
@@ -883,6 +970,24 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
                                               : Colors.red,
                                         ),
                                       ),
+                                      if (busRoute.isTripActive && busRoute.isReverse) ...[
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.brightOrange.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: const Text(
+                                            'RETURN TRIP',
+                                            style: TextStyle(
+                                              color: AppColors.brightOrange,
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.w900,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ],
                                   ),
                                   if (busRoute.isTripActive)
@@ -997,13 +1102,6 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
           color: const Color(0xFFF8FAFC),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: const Color(0xFFE2E8F0)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.02),
-              blurRadius: 10,
-              offset: const Offset(0, 5),
-            ),
-          ],
         ),
         child: Column(
           children: [
@@ -1048,13 +1146,6 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: Colors.grey.shade100),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 15,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),

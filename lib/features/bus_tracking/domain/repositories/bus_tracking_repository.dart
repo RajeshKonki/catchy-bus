@@ -5,7 +5,7 @@ import '../entities/bus_route.dart';
 /// Repository interface for bus tracking operations
 abstract class BusTrackingRepository {
   /// Get the current bus route information
-  Future<Either<Failure, BusRoute>> getBusRoute(String busNumber);
+  Future<Either<Failure, BusRoute>> getBusRoute(String busNumber, {String? routeId});
 
   /// Get list of available buses
   Future<Either<Failure, List<BusSummary>>> getAvailableBuses();
@@ -27,7 +27,7 @@ abstract class BusTrackingRepository {
   Future<Either<Failure, List<Map<String, dynamic>>>> getAllStudentsForBus(String busNumber);
 
   /// Update bus location (for real-time tracking)
-  Stream<Either<Failure, BusRoute>> trackBusLocation(String busNumber);
+  Stream<Either<Failure, BusRoute>> trackBusLocation(String busNumber, {bool? initialIsReverse, String? routeId});
 
   /// Stream real-time trip status updates (start/end/cancel/stop_skipped)
   Stream<Map<String, dynamic>> streamTripStatus(String busNumber);

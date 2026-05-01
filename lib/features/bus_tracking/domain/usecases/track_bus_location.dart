@@ -12,12 +12,22 @@ class TrackBusLocation
 
   @override
   Stream<Either<Failure, BusRoute>> call(TrackBusLocationParams params) {
-    return repository.trackBusLocation(params.busNumber);
+    return repository.trackBusLocation(
+      params.busNumber,
+      initialIsReverse: params.initialIsReverse,
+      routeId: params.routeId,
+    );
   }
 }
 
 class TrackBusLocationParams {
   final String busNumber;
+  final bool? initialIsReverse;
+  final String? routeId;
 
-  TrackBusLocationParams({required this.busNumber});
+  TrackBusLocationParams({
+    required this.busNumber,
+    this.initialIsReverse,
+    this.routeId,
+  });
 }

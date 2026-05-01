@@ -40,44 +40,33 @@ class NotificationsNotifier extends StateNotifier<NotificationsState> {
   }
 
   Future<void> markAsRead(String notificationId) async {
-    await repository.markAsRead(notificationId);
+    // According to user request, marking as read should delete the notification
+    await repository.deleteNotification(notificationId);
     if (state is NotificationsLoaded) {
       final currentNotifications = (state as NotificationsLoaded).notifications;
-      final updatedNotifications = currentNotifications.map((n) {
-        if (n.id == notificationId) {
-          return NotificationEntity(
-            id: n.id,
-            title: n.title,
-            body: n.body,
-            createdAt: n.createdAt,
-            isRead: true,
-            phoneNumber: n.phoneNumber,
-            data: n.data,
-          );
-        }
-        return n;
-      }).toList();
+      final updatedNotifications = currentNotifications.where((n) => n.id != notificationId).toList();
       state = NotificationsLoaded(updatedNotifications);
     }
   }
 
   Future<void> markAllAsRead() async {
-    await repository.markAllAsRead();
+    // According to user request, marking all as read should delete all notifications
+    await repository.deleteAllNotifications();
+    state = const NotificationsLoaded([]);
+  }
+
+  Future<void> deleteNotification(String notificationId) async {
+    await repository.deleteNotification(notificationId);
     if (state is NotificationsLoaded) {
       final currentNotifications = (state as NotificationsLoaded).notifications;
-      final updatedNotifications = currentNotifications.map((n) {
-        return NotificationEntity(
-          id: n.id,
-          title: n.title,
-          body: n.body,
-          createdAt: n.createdAt,
-          isRead: true,
-          phoneNumber: n.phoneNumber,
-          data: n.data,
-        );
-      }).toList();
+      final updatedNotifications = currentNotifications.where((n) => n.id != notificationId).toList();
       state = NotificationsLoaded(updatedNotifications);
     }
+  }
+
+  Future<void> deleteAllNotifications() async {
+    await repository.deleteAllNotifications();
+    state = const NotificationsLoaded([]);
   }
 }
 

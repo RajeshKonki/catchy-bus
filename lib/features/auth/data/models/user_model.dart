@@ -24,6 +24,10 @@ class UserModel {
   final String? fcmToken;
   @JsonKey(name: 'studentId')
   final String? studentId;
+  @JsonKey(name: 'collegeId')
+  final String? collegeId;
+  final String? department;
+  final String? year;
   final bool? isMultiAccount;
   @JsonKey(name: 'accounts')
   final List<UserModel>? accounts;
@@ -41,6 +45,9 @@ class UserModel {
     this.collegeImageUrl,
     this.fcmToken,
     this.studentId,
+    this.collegeId,
+    this.department,
+    this.year,
     this.isMultiAccount,
     this.accounts,
   });
@@ -59,6 +66,9 @@ class UserModel {
       collegeImageUrl: json['collegeImageUrl'] as String?,
       fcmToken: json['fcmToken'] as String?,
       studentId: json['studentId'] as String?,
+      collegeId: (json['collegeId'] ?? (json['college'] is Map ? json['college']['id'] : null)) as String?,
+      department: json['department'] as String?,
+      year: json['year'] as String?,
       isMultiAccount: json['isMultiAccount'] as bool?,
       accounts: (json['accounts'] as List?)
           ?.map((e) => UserModel.fromJson(e as Map<String, dynamic>))
@@ -80,6 +90,9 @@ class UserModel {
       'collegeImageUrl': collegeImageUrl,
       'fcmToken': fcmToken,
       'studentId': studentId,
+      'collegeId': collegeId,
+      'department': department,
+      'year': year,
       'isMultiAccount': isMultiAccount,
       'accounts': accounts?.map((e) => e.toJson()).toList(),
     };
@@ -99,6 +112,9 @@ class UserModel {
       collegeImageUrl: collegeImageUrl,
       fcmToken: fcmToken,
       studentId: studentId,
+      collegeId: collegeId,
+      department: department,
+      year: year,
       isMultiAccount: isMultiAccount,
       accounts: accounts?.map((e) => e.toEntity()).toList(),
     );
@@ -118,6 +134,9 @@ class UserModel {
       collegeImageUrl: entity.collegeImageUrl,
       fcmToken: entity.fcmToken,
       studentId: entity.studentId,
+      collegeId: entity.collegeId,
+      department: entity.department,
+      year: entity.year,
       isMultiAccount: entity.isMultiAccount,
       accounts: entity.accounts?.map((e) => UserModel.fromEntity(e)).toList(),
     );

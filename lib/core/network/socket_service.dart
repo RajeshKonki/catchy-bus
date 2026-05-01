@@ -139,17 +139,20 @@ class SocketService {
     });
   }
 
-  void startTrip(String busNumber, {String? routeId, double? driverLat, double? driverLng}) {
-    if (routeId != null) {
-      emit('start_trip', {
-        'busNumber': busNumber,
-        'routeId': routeId,
-        if (driverLat != null) 'driverLat': driverLat,
-        if (driverLng != null) 'driverLng': driverLng,
-      });
-    } else {
-      emit('start_trip', busNumber);
-    }
+  void startTrip(
+    String busNumber, {
+    String? routeId,
+    double? driverLat,
+    double? driverLng,
+    bool isReverse = false,
+  }) {
+    emit('start_trip', {
+      'busNumber': busNumber,
+      if (routeId != null) 'routeId': routeId,
+      if (driverLat != null) 'driverLat': driverLat,
+      if (driverLng != null) 'driverLng': driverLng,
+      'isReverse': isReverse,
+    });
   }
 
   void endTrip(String busNumber, {double? driverLat, double? driverLng}) {

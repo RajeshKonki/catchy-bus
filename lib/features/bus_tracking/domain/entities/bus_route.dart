@@ -19,7 +19,9 @@ class BusRoute extends Equatable {
   final BusPosition busPosition;
   final List<RouteStop> stops;
   final List<RoutePoint> routePath;
+  final String? routeName;
   final bool isTripActive;
+  final bool isReverse;
   final List<Map<String, dynamic>> students;
   /// 0.0 = at fromStop, 1.0 = at nextStop. -1 = at a stop (not in transit)
   final double transitProgress;
@@ -44,7 +46,9 @@ class BusRoute extends Equatable {
     required this.busPosition,
     required this.stops,
     required this.routePath,
+    this.routeName,
     this.isTripActive = false,
+    this.isReverse = false,
     this.students = const [],
     this.transitProgress = -1.0,
     this.transitFromStopIndex = -1,
@@ -69,7 +73,9 @@ class BusRoute extends Equatable {
     busPosition,
     stops,
     routePath,
+    routeName,
     isTripActive,
+    isReverse,
     students,
     transitProgress,
     transitFromStopIndex,
@@ -93,7 +99,9 @@ class BusRoute extends Equatable {
     BusPosition? busPosition,
     List<RouteStop>? stops,
     List<RoutePoint>? routePath,
+    String? routeName,
     bool? isTripActive,
+    bool? isReverse,
     List<Map<String, dynamic>>? students,
     double? transitProgress,
     int? transitFromStopIndex,
@@ -116,7 +124,9 @@ class BusRoute extends Equatable {
       busPosition: busPosition ?? this.busPosition,
       stops: stops ?? this.stops,
       routePath: routePath ?? this.routePath,
+      routeName: routeName ?? this.routeName,
       isTripActive: isTripActive ?? this.isTripActive,
+      isReverse: isReverse ?? this.isReverse,
       students: students ?? this.students,
       transitProgress: transitProgress ?? this.transitProgress,
       transitFromStopIndex: transitFromStopIndex ?? this.transitFromStopIndex,
@@ -133,6 +143,8 @@ class BusPosition extends Equatable {
   final String? nextStop;
   final bool? isOnTime;
   final int? delayMinutes;
+  final bool? isTripActive;
+  final bool? isReverse;
   final List<Map<String, dynamic>>? students;
   
   const BusPosition({
@@ -143,6 +155,8 @@ class BusPosition extends Equatable {
     this.nextStop,
     this.isOnTime,
     this.delayMinutes,
+    this.isTripActive,
+    this.isReverse,
     this.students,
   });
 
@@ -155,6 +169,8 @@ class BusPosition extends Equatable {
     nextStop,
     isOnTime,
     delayMinutes,
+    isTripActive,
+    isReverse,
     students,
   ];
 

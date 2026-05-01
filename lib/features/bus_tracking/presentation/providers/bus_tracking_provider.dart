@@ -34,6 +34,8 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
   StreamSubscription? _trackingSubscription;
   StreamSubscription? _tripStatusSubscription;
   bool _isFetchingRoadRoute = false;
+  bool? _lockedDirection;
+  bool _isReloading = false;
 
   BusTrackingNotifier({
     required this.getBusRoute,
@@ -45,13 +47,35 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
     this.currentUser,
   }) : super(const BusTrackingState.initial());
 
-  Future<void> loadBusRoute(String busNumber) async {
-    state = const BusTrackingState.loading();
+  Future<void> loadBusRoute(String busNumber, {String? routeId}) async {
+    if (_isReloading) return;
+    _isReloading = true;
 
-    final result = await getBusRoute(GetBusRouteParams(busNumber: busNumber));
+    // Only show loading if we have NO data. If we already have a route,
+    // keep it on screen while we refresh to prevent white-screen flickering.
+    final bool isNotLoaded = state.maybeWhen(
+      loaded: (_) => false,
+      orElse: () => true,
+    );
+
+    if (isNotLoaded) {
+      state = const BusTrackingState.loading();
+    }
+
+    final result = await getBusRoute(
+      GetBusRouteParams(busNumber: busNumber, routeId: routeId),
+    );
+    if (!mounted) return;
+
     final studentManifestResult = await getAllStudentsForBus(busNumber);
+    if (!mounted) return;
 
-    result.fold((failure) => state = BusTrackingState.error(failure.message), (
+    result.fold((failure) {
+      _isReloading = false;
+      if (mounted) {
+        state = BusTrackingState.error(failure.message);
+      }
+    }, (
       busRoute,
     ) async {
       final List<Map<String, dynamic>> students = studentManifestResult.fold(
@@ -59,7 +83,31 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
         (s) => s,
       );
 
-      state = BusTrackingState.loaded(busRoute.copyWith(students: students));
+      // IMPORTANT: Preserve the current direction and trip status if we already set it
+      // This prevents UI flickering while waiting for slow server REST refreshes.
+      // Use the direction from the server result.
+      final bool isReverseMode = busRoute.isReverse;
+
+      // CRITICAL: Ensure stops and routePath always match the intended direction.
+      // If we are in reverse mode but the data is in forward order, FLIP IT.
+      // If we are in forward mode but the data is in reverse order, FLIP IT.
+      final bool currentlyReversed = busRoute.isReverse;
+      final bool needsFlip = isReverseMode != currentlyReversed;
+
+      state = BusTrackingState.loaded(
+        busRoute.copyWith(
+          students: students,
+          isReverse: isReverseMode,
+          isTripActive: busRoute.isTripActive,
+          stops: needsFlip ? busRoute.stops.reversed.toList() : busRoute.stops,
+          routePath: needsFlip
+              ? busRoute.routePath.reversed.toList()
+              : busRoute.routePath,
+        ),
+      );
+
+      // Lock the direction to prevent socket updates from flipping the route
+      _lockedDirection ??= isReverseMode;
 
       // If route path is missing or just basic points, fetch better road-mapped directions
       if ((busRoute.routePath.length <= busRoute.stops.length) &&
@@ -98,6 +146,8 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
           waypoints: waypoints,
         );
 
+        if (!mounted) return;
+
         if (path.isNotEmpty) {
           print('DEBUG: Success! Received ${path.length} road points');
           final routePoints = path
@@ -112,6 +162,7 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
           print('DEBUG: Failed to fetch road directions from API');
         }
       }
+      _isReloading = false;
     });
   }
 
@@ -124,9 +175,66 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
     state.maybeWhen(
       loaded: (currentRoute) {
         final stops = currentRoute.stops;
+        final path = currentRoute.routePath;
         if (stops.isEmpty) return;
 
-        const double atStopRadiusM = 30.0; // only "at stop" within 30m
+        // ── STEP 0: JITTER FILTER ───────────────────────────────────────────
+        // Ignore micro-movements (less than 5 meters) to prevent the "ratchet"
+        // effect where GPS jitter makes the stationary bus crawl forward.
+        final double distFromLast = Geolocator.distanceBetween(
+          currentRoute.busPosition.latitude,
+          currentRoute.busPosition.longitude,
+          position.latitude,
+          position.longitude,
+        );
+        if (distFromLast < 5.0 && currentRoute.transitProgress > 0) {
+          return;
+        }
+
+        // ── STEP 1: SNAP BUS POSITION TO ROAD (if path available) ──────────
+        BusPosition snappedPosition = position;
+        if (path.isNotEmpty) {
+          double minPathDist = double.infinity;
+          RoutePoint? closestPoint;
+
+          for (int i = 0; i < path.length - 1; i++) {
+            final p1 = path[i];
+            final p2 = path[i + 1];
+
+            // Find closest point on segment p1-p2
+            final projected = _findClosestPointOnSegment(
+              position.latitude,
+              position.longitude,
+              p1.latitude,
+              p1.longitude,
+              p2.latitude,
+              p2.longitude,
+            );
+
+            final dist = Geolocator.distanceBetween(
+              position.latitude,
+              position.longitude,
+              projected.latitude,
+              projected.longitude,
+            );
+
+            if (dist < minPathDist) {
+              minPathDist = dist;
+              closestPoint = projected;
+            }
+          }
+
+          if (closestPoint != null && minPathDist < 100) {
+            // Only snap if within 100m of road
+            snappedPosition = position.copyWith(
+              latitude: closestPoint.latitude,
+              longitude: closestPoint.longitude,
+            );
+          }
+        }
+
+        const double atStopRadiusM =
+            200.0; // matched with server's 200m threshold
 
         // Precompute distances from bus to every stop (in meters)
         final List<double> distancesToStops = stops.map((stop) {
@@ -153,15 +261,23 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
           final updatedStops = stops.asMap().entries.map((entry) {
             final i = entry.key;
             final stop = entry.value;
-            if (i < closestIdx) return stop.copyWith(type: StopType.passedStop);
+            // The list is always in travel order (reversed during load if it's a return trip),
+            // so stops before the current index are always "passed".
+            if (i < closestIdx) {
+              return stop.type == StopType.skippedStop
+                  ? stop
+                  : stop.copyWith(type: StopType.passedStop);
+            }
             if (i == closestIdx)
               return stop.copyWith(type: StopType.currentLocation);
-            return stop.copyWith(type: StopType.futureStop);
+            return stop.type == StopType.skippedStop
+                ? stop
+                : stop.copyWith(type: StopType.futureStop);
           }).toList();
 
           state = BusTrackingState.loaded(
             currentRoute.copyWith(
-              busPosition: position,
+              busPosition: snappedPosition,
               currentLocation: stops[closestIdx].name,
               stops: updatedStops,
               transitProgress: -1.0,
@@ -170,12 +286,8 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
           );
         } else {
           // ── Bus is IN TRANSIT ─────────────────────────────────────────────
-          // Use perpendicular-projection scoring to find which segment
-          // [stops[i] → stops[i+1]] the bus GPS point lies closest to.
-          //
-          // For each segment A→B we project the bus point P onto the line AB.
-          // The projection parameter t ∈ [0,1] gives the fractional position.
-          // We keep the segment whose clamped projection point is nearest to P.
+          // Retrieve previously confirmed segment for hysteresis.
+          final int prevSegment = currentRoute.transitFromStopIndex;
 
           int bestSegment = 0;
           double bestSegmentDist = double.infinity;
@@ -189,14 +301,10 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
             final px = position.longitude;
             final py = position.latitude;
 
-            // Use real-world Haversine distances for robust fractional progress
-            // avoiding perpendicular projection errors on curved roads.
             final distAP = Geolocator.distanceBetween(ay, ax, py, px);
             final distPB = Geolocator.distanceBetween(py, px, by, bx);
             final segmentLength = Geolocator.distanceBetween(ay, ax, by, bx);
 
-            // True deviation distance (triangle inequality difference)
-            // Smaller deviation means the bus is closer to this segment
             final deviation = (distAP + distPB) - segmentLength;
 
             double t = 0.0;
@@ -211,21 +319,56 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
             }
           }
 
-          // Clamp progress away from exact 0 / 1 to avoid snapping to stop icons
+          // ── HYSTERESIS: Only switch segments when the improvement is clear (>5m) ──
+          // This prevents the bus icon from flickering between adjacent stops when
+          // the GPS deviation scores are nearly equal near stop boundaries.
+          if (prevSegment >= 0 &&
+              prevSegment < stops.length - 1 &&
+              bestSegment != prevSegment) {
+            // Calculate deviation for the previously confirmed segment
+            final ax = stops[prevSegment].longitude;
+            final ay = stops[prevSegment].latitude;
+            final bx = stops[prevSegment + 1].longitude;
+            final by = stops[prevSegment + 1].latitude;
+            final px = position.longitude;
+            final py = position.latitude;
+            final distAP = Geolocator.distanceBetween(ay, ax, py, px);
+            final distPB = Geolocator.distanceBetween(py, px, by, bx);
+            final segmentLength = Geolocator.distanceBetween(ay, ax, by, bx);
+            final prevDeviation = (distAP + distPB) - segmentLength;
+
+            // Only switch if the new segment is clearly better by more than 5 metres
+            if ((prevDeviation - bestSegmentDist) < 5.0) {
+              // Keep the previous segment; recompute t for it
+              bestSegment = prevSegment;
+              final dAP = Geolocator.distanceBetween(ay, ax, py, px);
+              final dPB = Geolocator.distanceBetween(py, px, by, bx);
+              bestT = (dAP + dPB > 0)
+                  ? (dAP / (dAP + dPB)).clamp(0.0, 1.0)
+                  : currentRoute.transitProgress.clamp(0.0, 1.0);
+            }
+          }
+
           final transitProg = bestT.clamp(0.02, 0.98);
 
-          // Mark stops as passed/future relative to this segment
           final updatedStops = stops.asMap().entries.map((entry) {
             final i = entry.key;
             final stop = entry.value;
-            if (i <= bestSegment)
-              return stop.copyWith(type: StopType.passedStop);
-            return stop.copyWith(type: StopType.futureStop);
+            // The list is always in travel order. If we are in segment i (between i and i+1),
+            // then all stops up to index i are already passed.
+            if (i <= bestSegment) {
+              return stop.type == StopType.skippedStop
+                  ? stop
+                  : stop.copyWith(type: StopType.passedStop);
+            }
+            return stop.type == StopType.skippedStop
+                ? stop
+                : stop.copyWith(type: StopType.futureStop);
           }).toList();
 
           state = BusTrackingState.loaded(
             currentRoute.copyWith(
-              busPosition: position,
+              busPosition: snappedPosition,
               currentLocation: 'In Transit (to ${stops[bestSegment + 1].name})',
               stops: updatedStops,
               transitProgress: transitProg,
@@ -238,16 +381,51 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
     );
   }
 
+  RoutePoint _findClosestPointOnSegment(
+    double px,
+    double py,
+    double ax,
+    double ay,
+    double bx,
+    double by,
+  ) {
+    double dx = bx - ax;
+    double dy = by - ay;
+    if (dx == 0 && dy == 0) return RoutePoint(latitude: ax, longitude: ay);
 
-  Future<void> startTracking(String busNumber) async {
+    double t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy);
+    t = t.clamp(0.0, 1.0);
+
+    return RoutePoint(latitude: ax + t * dx, longitude: ay + t * dy);
+  }
+
+  Future<void> startTracking(String busNumber, {bool? initialIsReverse, String? routeId}) async {
     _trackingSubscription?.cancel();
     _tripStatusSubscription?.cancel();
+    _lockedDirection = initialIsReverse;
 
-    // Only set to loading if we don't already have some data, to avoid UI flicker
-    state.maybeWhen(
-      loaded: (_) {},
-      orElse: () => state = const BusTrackingState.loading(),
-    );
+    // Proactively update state with direction if provided
+    if (initialIsReverse != null) {
+      state.maybeWhen(
+        loaded: (busRoute) {
+          final bool wasAlreadyReversed = busRoute.isReverse;
+          final bool needsFlip = initialIsReverse != wasAlreadyReversed;
+
+          state = BusTrackingState.loaded(
+            busRoute.copyWith(
+              isReverse: initialIsReverse,
+              stops: needsFlip
+                  ? busRoute.stops.reversed.toList()
+                  : busRoute.stops,
+              routePath: needsFlip
+                  ? busRoute.routePath.reversed.toList()
+                  : busRoute.routePath,
+            ),
+          );
+        },
+        orElse: () {},
+      );
+    }
 
     // Subscribe to real-time trip status changes from the server
     // This keeps isTripActive in sync across driver and student views
@@ -258,7 +436,6 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
       final isTripActive = event['isTripActive'] as bool?;
 
       if (type == 'stop_skipped') {
-        // Driver skipped a stop — update student route list instantly
         final skippedStop = event['stopName'] as String?;
         if (skippedStop != null) markStopSkipped(skippedStop);
         return;
@@ -269,9 +446,10 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
         final studentName = event['studentName'] as String?;
         final stopName = event['pickupStop'] as String?;
         final busNo = event['busNumber'] as String?;
-        
-        // CRITICAL FILTER: Only show notification to the student concerned
-        if (currentUser != null && (studentId == currentUser?.id || (currentUser?.name == studentName))) {
+
+        if (currentUser != null &&
+            (studentId == currentUser?.id ||
+                (currentUser?.name == studentName))) {
           showAttendanceNotification(
             studentName: studentName ?? currentUser?.name ?? 'Student',
             busNumber: busNo ?? busNumber,
@@ -282,31 +460,83 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
       }
 
       if (isTripActive != null) {
-        // Trip started / ended / cancelled — sync isTripActive
+        final bool? isReverse =
+            (event['isReverse'] as bool?) ??
+            (event['is_reverse'] as bool?);
+
+        // STRICTURE DIRECTION LOCK: If this event is for the opposite trip, ignore it completely.
+        if (isReverse != null && _lockedDirection != null && isReverse != _lockedDirection) {
+          return;
+        }
+
         state.maybeWhen(
           loaded: (busRoute) {
-            state = BusTrackingState.loaded(
-              busRoute.copyWith(isTripActive: isTripActive),
-            );
+            final bool tripStarted = isTripActive && !busRoute.isTripActive;
+            final bool tripEnded = !isTripActive && busRoute.isTripActive;
+
+            if (tripStarted) {
+              // ── A new trip started for our specific direction ──
+              state = BusTrackingState.loaded(
+                busRoute.copyWith(isTripActive: true),
+              );
+            } else if (tripEnded) {
+              // ── Trip just ended ──
+              stopTrackingOnly();
+              
+              showTripCompletedNotification(
+                busNumber: busNumber,
+                isReverse: busRoute.isReverse,
+              );
+
+              state = BusTrackingState.loaded(
+                busRoute.copyWith(isTripActive: false),
+              );
+            }
           },
-          orElse: () {},
+          orElse: () {
+            if (isTripActive == true) {
+              state = const BusTrackingState.loading();
+              loadBusRoute(busNumber, routeId: routeId).then((_) {
+                if (!mounted) return;
+                startTracking(busNumber, initialIsReverse: isReverse ?? false, routeId: routeId);
+              });
+            }
+          },
         );
       }
     });
 
-    _trackingSubscription = trackBusLocation(TrackBusLocationParams(busNumber: busNumber)).listen((
+    _trackingSubscription = trackBusLocation(
+      TrackBusLocationParams(
+        busNumber: busNumber,
+        initialIsReverse: _lockedDirection,
+        routeId: routeId,
+      ),
+    ).listen((
       result,
     ) {
       result.fold((failure) => state = BusTrackingState.error(failure.message), (
         busRoute,
       ) async {
+        // ── Direction Filter ────────────────────────────────────────────────
+        // Ignore updates if they belong to an ACTIVE opposite trip.
+        if (busRoute.isTripActive && _lockedDirection != null && busRoute.isReverse != _lockedDirection) {
+          return;
+        }
+
+        // If the trip is inactive, the server might send noisy isReverse flags. 
+        // Accept the GPS update to keep the bus moving on the map, but FORCE 
+        // the direction to stay locked so our UI doesn't flicker.
+        if (!busRoute.isTripActive && _lockedDirection != null && busRoute.isReverse != _lockedDirection) {
+          busRoute = busRoute.copyWith(isReverse: _lockedDirection);
+        }
         // ── Step 0: Remember current transit position BEFORE overwriting ─────
         // Needed to prevent backward snapping when server sends stale GPS.
-        double prevTransitProg   = -1.0;
-        int    prevTransitFromIdx = -1;
+        double prevTransitProg = -1.0;
+        int prevTransitFromIdx = -1;
         state.maybeWhen(
           loaded: (snap) {
-            prevTransitProg   = snap.transitProgress;
+            prevTransitProg = snap.transitProgress;
             prevTransitFromIdx = snap.transitFromStopIndex;
           },
           orElse: () {},
@@ -316,11 +546,11 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
         updateLocalPosition(busRoute.busPosition);
 
         // ── Step 2: Capture the GPS-computed transit values ───────────────────
-        double computedTransitProg   = -1.0;
-        int    computedTransitFromIdx = -1;
+        double computedTransitProg = -1.0;
+        int computedTransitFromIdx = -1;
         state.maybeWhen(
           loaded: (snapshot) {
-            computedTransitProg   = snapshot.transitProgress;
+            computedTransitProg = snapshot.transitProgress;
             computedTransitFromIdx = snapshot.transitFromStopIndex;
           },
           orElse: () {},
@@ -332,23 +562,35 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
         // previous higher value. Prevents static emulator GPS or server lag
         // from snapping the bus backward while the simulation moves it forward.
         if (prevTransitProg > 0 && prevTransitFromIdx >= 0) {
-          final goesBackward =
+          // Forward means index increases (0 -> N)
+          final bool goesBackward =
               computedTransitFromIdx < prevTransitFromIdx ||
               (computedTransitFromIdx == prevTransitFromIdx &&
-               computedTransitProg   >= 0 &&
-               computedTransitProg   <  prevTransitProg);
+                  computedTransitProg < prevTransitProg);
+
           if (goesBackward) {
-            computedTransitProg   = prevTransitProg;
+            computedTransitProg = prevTransitProg;
             computedTransitFromIdx = prevTransitFromIdx;
           }
         }
 
         // ── Step 3: Merge server update, preserving forward transit values ────
+        // IMPORTANT: Only use server stops on first load (when local state has none yet).
+        // updateLocalPosition() exits early when stops are empty, so the first socket
+        // update would leave stops permanently empty if we don't seed from the server.
+        // After that, preserve GPS-computed stop types to avoid server-lag flickering.
         state.maybeWhen(
           loaded: (currentRoute) {
             final updatedIsTripActive = busRoute.isTripActive
                 ? true
                 : currentRoute.isTripActive;
+            // ── Step 1: Resolve stops list ──────────────────────────────────────────
+            // If the direction changed, we MUST use the new stops.
+            final bool directionChanged =
+                busRoute.isReverse != currentRoute.isReverse;
+            final stopsToUse = (currentRoute.stops.isEmpty || directionChanged)
+                ? busRoute.stops
+                : currentRoute.stops;
             state = BusTrackingState.loaded(
               currentRoute.copyWith(
                 busPosition: busRoute.busPosition,
@@ -356,8 +598,9 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
                 nextStop: busRoute.nextStop,
                 isOnTime: busRoute.isOnTime,
                 arrivalTimeMinutes: busRoute.arrivalTimeMinutes,
-                stops: busRoute.stops,
+                stops: stopsToUse,
                 isTripActive: updatedIsTripActive,
+                isReverse: busRoute.isReverse,
                 transitProgress: computedTransitProg,
                 transitFromStopIndex: computedTransitFromIdx,
               ),
@@ -465,7 +708,7 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
           // Add new student (e.g. from QR scan of student not in current manifest)
           newStudents = [
             ...busRoute.students,
-            {...studentData, 'isBoarded': true}
+            {...studentData, 'isBoarded': true},
           ];
         }
 
@@ -476,7 +719,6 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
       orElse: () {},
     );
   }
-
 
   void markStopReached(
     String stopName, {
@@ -533,22 +775,26 @@ class BusTrackingNotifier extends StateNotifier<BusTrackingState> {
     );
   }
 
-  void clearActiveTrip() {
-    state.maybeWhen(
-      loaded: (busRoute) {
-        state = BusTrackingState.loaded(busRoute.copyWith(isTripActive: false));
-      },
-      orElse: () {
-        state = const BusTrackingState.initial();
-      },
-    );
+  void stopTracking() {
+    _trackingSubscription?.cancel();
+    _trackingSubscription = null;
+    _tripStatusSubscription?.cancel();
+    _tripStatusSubscription = null;
+  }
+
+  void stopTrackingOnly() {
+    _trackingSubscription?.cancel();
+    _trackingSubscription = null;
   }
 
   @override
   void dispose() {
-    _trackingSubscription?.cancel();
-    _tripStatusSubscription?.cancel();
+    stopTracking();
     super.dispose();
+  }
+
+  void clearActiveTrip() {
+    state = const BusTrackingState.initial();
   }
 }
 
@@ -564,9 +810,18 @@ class BusListNotifier extends StateNotifier<BusListState> {
     // 1. Get student current location
     Position? studentPosition;
     try {
-      studentPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always) {
+        studentPosition = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 5),
+        );
+      }
     } catch (e) {
       // Fallback or handle error - for now proceed with null or dummy if needed
     }
@@ -696,7 +951,9 @@ final getStudentsForStopUseCaseProvider = Provider<GetStudentsForStop>((ref) {
   return GetStudentsForStop(repository);
 });
 
-final getAllStudentsForBusUseCaseProvider = Provider<GetAllStudentsForBus>((ref) {
+final getAllStudentsForBusUseCaseProvider = Provider<GetAllStudentsForBus>((
+  ref,
+) {
   final repository = ref.watch(busTrackingRepositoryProvider);
   return GetAllStudentsForBus(repository);
 });
@@ -705,7 +962,7 @@ final busTrackingProvider =
     StateNotifierProvider<BusTrackingNotifier, BusTrackingState>((ref) {
       final repository = ref.watch(busTrackingRepositoryProvider);
       final authState = ref.watch(authProvider);
-      
+
       return BusTrackingNotifier(
         getBusRoute: ref.watch(getBusRouteUseCaseProvider),
         trackBusLocation: ref.watch(trackBusLocationUseCaseProvider),

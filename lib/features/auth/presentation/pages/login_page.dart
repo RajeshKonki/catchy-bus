@@ -208,7 +208,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            elevation: 2,
+                            elevation: 0,
                           ),
                           child: authState.isLoading
                               ? const SizedBox(
@@ -302,17 +302,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     color: isSelected
                         ? AppColors.deepBlue
                         : Colors.grey.shade300,
-                    width: 1.5,
                   ),
-                  boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: AppColors.deepBlue.withValues(alpha: 0.2),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ]
-                      : [],
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

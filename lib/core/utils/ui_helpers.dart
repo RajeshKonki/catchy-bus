@@ -2,6 +2,16 @@ import 'package:flutter/material.dart';
 import '../../config/theme/app_theme.dart';
 
 class UIHelpers {
+  /// Formats distance from KM into a user-friendly string (KM or Meters)
+  static String formatDistance(double? km) {
+    if (km == null) return '...';
+    if (km < 1.0) {
+      return '${(km * 1000).toInt()} m';
+    } else {
+      return '${km.toStringAsFixed(1)} km';
+    }
+  }
+
   /// Shows a user-friendly tooltip/snackbar for errors
   static void showErrorTooltip(BuildContext context, String message) {
     // Make the message more user friendly by stripping technical prefixes

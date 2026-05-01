@@ -1,42 +1,57 @@
-import 'package:freezed_annotation/freezed_annotation.dart';
 import '../../domain/entities/bus_route.dart';
 
-part 'bus_route_model.freezed.dart';
-part 'bus_route_model.g.dart';
+class BusRouteModel {
+  final String id;
+  final String busNumber;
+  final String currentLocation;
+  final String nextStop;
+  final String? startPoint;
+  final String? endPoint;
+  final int arrivalTimeMinutes;
+  final double distanceKm;
+  final bool isOnTime;
+  final String driverPhone;
+  final String? driverName;
+  final String? driverPhoto;
+  final int? capacity;
+  final String? collegeName;
+  final BusPositionModel busPosition;
+  final List<RouteStopModel> stops;
+  final List<RoutePointModel> routePath;
+  final String? routeName;
+  final bool isTripActive;
+  final bool isReverse;
+  final List<Map<String, dynamic>> students;
 
-@freezed
-class BusRouteModel with _$BusRouteModel {
-  const BusRouteModel._();
-
-  const factory BusRouteModel({
-    required String id,
-    required String busNumber,
-    required String currentLocation,
-    required String nextStop,
-    String? startPoint,
-    String? endPoint,
-    required int arrivalTimeMinutes,
-    required double distanceKm,
-    required bool isOnTime,
-    required String driverPhone,
-    String? driverName,
-    String? driverPhoto,
-    int? capacity,
-    String? collegeName,
-    required BusPositionModel busPosition,
-    required List<RouteStopModel> stops,
-    required List<RoutePointModel> routePath,
-    @Default(false) bool isTripActive,
-    @Default([]) List<Map<String, dynamic>> students,
-  }) = _BusRouteModel;
+  const BusRouteModel({
+    required this.id,
+    required this.busNumber,
+    required this.currentLocation,
+    required this.nextStop,
+    this.startPoint,
+    this.endPoint,
+    required this.arrivalTimeMinutes,
+    required this.distanceKm,
+    required this.isOnTime,
+    required this.driverPhone,
+    this.driverName,
+    this.driverPhoto,
+    this.capacity,
+    this.collegeName,
+    required this.busPosition,
+    required this.stops,
+    required this.routePath,
+    this.routeName,
+    this.isTripActive = false,
+    this.isReverse = false,
+    this.students = const [],
+  });
 
   factory BusRouteModel.fromJson(Map<String, dynamic> json, {String? preferredRouteId}) {
-    // Determine the route to show based on active trip or driver preference
     final trips = (json['trips'] as List? ?? []);
     final activeTripRouteId = trips.isNotEmpty ? trips[0]['routeId']?.toString() : null;
     final targetRouteId = activeTripRouteId ?? preferredRouteId;
 
-    // Handle nested structure if coming from /api/buses/number/:busNumber
     Map<String, dynamic> routeData = <String, dynamic>{};
     if (json['route'] is Map) {
       routeData = Map<String, dynamic>.from(json['route'] as Map);
@@ -58,7 +73,6 @@ class BusRouteModel with _$BusRouteModel {
     final studentsList = (json['students'] as List? ?? []);
     final List<RouteStopModel> allStops = [];
 
-    // Map to store counts of students per stop
     final Map<String, int> stopStudentCounts = {};
     for (var item in studentsList) {
       final student = Map<String, dynamic>.from(item as Map);
@@ -68,7 +82,6 @@ class BusRouteModel with _$BusRouteModel {
       }
     }
 
-    // Add start point if available
     if (routeData['startPoint'] != null) {
       final name = routeData['startPoint'];
       allStops.add(
@@ -76,13 +89,12 @@ class BusRouteModel with _$BusRouteModel {
           name: name,
           latitude: (routeData['startLat'] ?? 0.0).toDouble(),
           longitude: (routeData['startLng'] ?? 0.0).toDouble(),
-          type: 'passed', // Assuming it's the start
+          type: 'passed',
           studentCount: stopStudentCounts[name],
         ),
       );
     }
 
-    // Parse active trip data if available
     final Map<String, Map<String, dynamic>> passedStopsMap = {};
     final Set<String> allBoardedStudentIds = {};
     if (trips.isNotEmpty) {
@@ -92,8 +104,6 @@ class BusRouteModel with _$BusRouteModel {
         final sMap = Map<String, dynamic>.from(s as Map);
         if (sMap['name'] != null) {
           passedStopsMap[sMap['name']] = sMap;
-          
-          // Collect all student IDs that have boarded during this trip
           final studentIds = sMap['studentIds'] as List? ?? [];
           for (var id in studentIds) {
             if (id != null) allBoardedStudentIds.add(id.toString());
@@ -102,7 +112,6 @@ class BusRouteModel with _$BusRouteModel {
       }
     }
 
-    // Add intermediate stops
     allStops.addAll(
       stopsList.map(
         (s) {
@@ -132,7 +141,6 @@ class BusRouteModel with _$BusRouteModel {
       ),
     );
 
-    // Add end point if available
     if (routeData['endPoint'] != null) {
       final name = routeData['endPoint'];
       allStops.add(
@@ -147,14 +155,35 @@ class BusRouteModel with _$BusRouteModel {
     }
 
     return BusRouteModel(
-      isTripActive: trips.isNotEmpty,
-      id: json['id'] ?? '',
+      routeName: routeData['name'] ?? routeData['title'],
+      isTripActive: json['isTripActive'] ?? trips.isNotEmpty,
+      isReverse: () {
+        if (json['isReverse'] != null) return json['isReverse'] as bool;
+        if (json['is_reverse'] != null) return json['is_reverse'] as bool;
+        
+        if (trips.isNotEmpty) {
+          // If a preferred route is specified, use its direction
+          if (preferredRouteId != null) {
+            final prefTrip = trips.firstWhere(
+              (t) => t['routeId']?.toString() == preferredRouteId,
+              orElse: () => null,
+            );
+            if (prefTrip != null) return prefTrip['isReverse'] == true || prefTrip['is_reverse'] == true;
+          }
+          
+          // Fallback to the first active trip
+          final activeTrip = trips.firstWhere(
+            (t) => t['status'] == 'STARTED',
+            orElse: () => trips[0],
+          );
+          return activeTrip['isReverse'] == true || activeTrip['is_reverse'] == true;
+        }
+        return false;
+      }(),
+      id: json['id']?.toString() ?? '',
       busNumber: json['busNumber'] ?? json['bus_number'] ?? '',
       currentLocation: json['currentLocation'] ?? json['current_location'] ?? 'Unknown',
-      nextStop:
-          json['nextStop'] ??
-          json['next_stop'] ??
-          (stopsList.isNotEmpty ? stopsList[0]['name'] ?? '' : 'No stops'),
+      nextStop: json['nextStop'] ?? json['next_stop'] ?? (stopsList.isNotEmpty ? stopsList[0]['name'] ?? '' : 'No stops'),
       startPoint: routeData['startPoint'] ?? json['startPoint'],
       endPoint: routeData['endPoint'] ?? json['endPoint'],
       arrivalTimeMinutes: json['arrivalTimeMinutes'] ?? 0,
@@ -170,16 +199,8 @@ class BusRouteModel with _$BusRouteModel {
           : json['bus_position'] != null
           ? BusPositionModel.fromJson(Map<String, dynamic>.from(json['bus_position'] as Map))
           : BusPositionModel(
-              latitude:
-                  (json['currentLat'] ??
-                          routeData['startLat'] ??
-                          (allStops.isNotEmpty ? allStops[0].latitude : 0.0))
-                      .toDouble(),
-              longitude:
-                  (json['currentLng'] ??
-                          routeData['startLng'] ??
-                          (allStops.isNotEmpty ? allStops[0].longitude : 0.0))
-                      .toDouble(),
+              latitude: (json['currentLat'] ?? routeData['startLat'] ?? (allStops.isNotEmpty ? allStops[0].latitude : 0.0)).toDouble(),
+              longitude: (json['currentLng'] ?? routeData['startLng'] ?? (allStops.isNotEmpty ? allStops[0].longitude : 0.0)).toDouble(),
               bearing: 0,
             ),
       stops: allStops,
@@ -188,10 +209,7 @@ class BusRouteModel with _$BusRouteModel {
         final student = Map<String, dynamic>.from(e as Map);
         final id = student['id']?.toString();
         if (id != null && allBoardedStudentIds.contains(id)) {
-          return {
-            ...student,
-            'isBoarded': true,
-          };
+          return {...student, 'isBoarded': true};
         }
         return student;
       }).toList(),
@@ -199,17 +217,10 @@ class BusRouteModel with _$BusRouteModel {
   }
 
   static List<RoutePointModel> _parseRoutePath(Map<String, dynamic> json, Map<String, dynamic> routeData) {
-    // Try multiple possible field names from different backend versions
-    final pathData = routeData['path'] ?? 
-                    routeData['routePath'] ?? 
-                    routeData['geometry'] ??
-                    json['routePath'] ?? 
-                    json['path'];
-    
+    final pathData = routeData['path'] ?? routeData['routePath'] ?? routeData['geometry'] ?? json['routePath'] ?? json['path'];
     if (pathData is List && pathData.isNotEmpty) {
       return pathData.map((p) => RoutePointModel.fromJson(Map<String, dynamic>.from(p as Map))).toList();
     }
-    
     return [];
   }
 
@@ -232,29 +243,55 @@ class BusRouteModel with _$BusRouteModel {
       busPosition: busPosition.toEntity(),
       stops: stops.map((s) => s.toEntity(currentLocation)).toList(),
       routePath: routePath.map((p) => p.toEntity()).toList(),
+      routeName: routeName,
       isTripActive: isTripActive,
+      isReverse: isReverse,
       students: students,
     );
   }
 }
 
-@freezed
-class BusPositionModel with _$BusPositionModel {
-  const BusPositionModel._();
+class BusPositionModel {
+  final double latitude;
+  final double longitude;
+  final double bearing;
+  final String? currentLocation;
+  final String? nextStop;
+  final bool? isOnTime;
+  final int? delayMinutes;
+  final bool? isTripActive;
+  final bool? isReverse;
+  final List<Map<String, dynamic>>? students;
 
-  const factory BusPositionModel({
-    required double latitude,
-    required double longitude,
-    required double bearing,
-    String? currentLocation,
-    String? nextStop,
-    bool? isOnTime,
-    int? delayMinutes,
-    List<Map<String, dynamic>>? students,
-  }) = _BusPositionModel;
+  const BusPositionModel({
+    required this.latitude,
+    required this.longitude,
+    required this.bearing,
+    this.currentLocation,
+    this.nextStop,
+    this.isOnTime,
+    this.delayMinutes,
+    this.isTripActive,
+    this.isReverse,
+    this.students,
+  });
 
-  factory BusPositionModel.fromJson(Map<String, dynamic> json) =>
-      _$BusPositionModelFromJson(json);
+  factory BusPositionModel.fromJson(Map<String, dynamic> json) {
+    return BusPositionModel(
+      latitude: (json['latitude'] ?? json['lat'] ?? 0.0).toDouble(),
+      longitude: (json['longitude'] ?? json['lng'] ?? 0.0).toDouble(),
+      bearing: (json['bearing'] ?? 0.0).toDouble(),
+      currentLocation: json['currentLocation'] ?? json['current_location'],
+      nextStop: json['nextStop'] ?? json['next_stop'],
+      isOnTime: json['isOnTime'] ?? json['is_on_time'],
+      delayMinutes: json['delayMinutes'] ?? json['delay_minutes'],
+      isTripActive: json['isTripActive'] ?? json['is_trip_active'],
+      isReverse: json['isReverse'] ?? json['is_reverse'],
+      students: json['students'] != null 
+          ? (json['students'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList()
+          : null,
+    );
+  }
 
   BusPosition toEntity() {
     return BusPosition(
@@ -265,28 +302,46 @@ class BusPositionModel with _$BusPositionModel {
       nextStop: nextStop,
       isOnTime: isOnTime,
       delayMinutes: delayMinutes,
+      isTripActive: isTripActive,
+      isReverse: isReverse,
       students: students,
     );
   }
 }
 
-@freezed
-class RouteStopModel with _$RouteStopModel {
-  const RouteStopModel._();
+class RouteStopModel {
+  final String name;
+  final double latitude;
+  final double longitude;
+  final String type;
+  final int? estimatedArrivalMinutes;
+  final int? studentCount;
+  final int? boardedStudentCount;
+  final String? scheduledTime;
 
-  const factory RouteStopModel({
-    required String name,
-    required double latitude,
-    required double longitude,
-    required String type,
-    int? estimatedArrivalMinutes,
-    int? studentCount,
-    int? boardedStudentCount,
-    String? scheduledTime,
-  }) = _RouteStopModel;
+  const RouteStopModel({
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+    required this.type,
+    this.estimatedArrivalMinutes,
+    this.studentCount,
+    this.boardedStudentCount,
+    this.scheduledTime,
+  });
 
-  factory RouteStopModel.fromJson(Map<String, dynamic> json) =>
-      _$RouteStopModelFromJson(json);
+  factory RouteStopModel.fromJson(Map<String, dynamic> json) {
+    return RouteStopModel(
+      name: json['name'] ?? '',
+      latitude: (json['lat'] ?? json['latitude'] ?? 0.0).toDouble(),
+      longitude: (json['lng'] ?? json['longitude'] ?? 0.0).toDouble(),
+      type: json['type'] ?? 'future',
+      estimatedArrivalMinutes: json['estimatedArrivalMinutes'],
+      studentCount: json['studentCount'],
+      boardedStudentCount: json['boardedStudentCount'],
+      scheduledTime: json['scheduledTime'],
+    );
+  }
 
   RouteStop toEntity(String busCurrentLocation) {
     return RouteStop(
@@ -303,30 +358,24 @@ class RouteStopModel with _$RouteStopModel {
 
   StopType _parseStopType(String type) {
     switch (type.toLowerCase()) {
-      case 'current':
-        return StopType.currentLocation;
-      case 'next':
-        return StopType.nextStop;
-      case 'future':
-        return StopType.futureStop;
-      case 'passed':
-        return StopType.passedStop;
-      case 'skipped':
-        return StopType.skippedStop;
-      default:
-        return StopType.futureStop;
+      case 'current': return StopType.currentLocation;
+      case 'next': return StopType.nextStop;
+      case 'future': return StopType.futureStop;
+      case 'passed': return StopType.passedStop;
+      case 'skipped': return StopType.skippedStop;
+      default: return StopType.futureStop;
     }
   }
 }
 
-@freezed
-class RoutePointModel with _$RoutePointModel {
-  const RoutePointModel._();
+class RoutePointModel {
+  final double latitude;
+  final double longitude;
 
-  const factory RoutePointModel({
-    required double latitude,
-    required double longitude,
-  }) = _RoutePointModel;
+  const RoutePointModel({
+    required this.latitude,
+    required this.longitude,
+  });
 
   factory RoutePointModel.fromJson(Map<String, dynamic> json) {
     return RoutePointModel(
@@ -340,24 +389,27 @@ class RoutePointModel with _$RoutePointModel {
   }
 }
 
-@freezed
-class BusSummaryModel with _$BusSummaryModel {
-  const BusSummaryModel._();
+class BusSummaryModel {
+  final String id;
+  final String busNumber;
+  final double latitude;
+  final double longitude;
+  final String status;
+  final bool isDelayed;
+  final List<RouteStopModel>? routeStops;
 
-  const factory BusSummaryModel({
-    required String id,
-    required String busNumber,
-    required double latitude,
-    required double longitude,
-    required String status,
-    required bool isDelayed,
-    List<RouteStopModel>? routeStops,
-  }) = _BusSummaryModel;
+  const BusSummaryModel({
+    required this.id,
+    required this.busNumber,
+    required this.latitude,
+    required this.longitude,
+    required this.status,
+    required this.isDelayed,
+    this.routeStops,
+  });
 
   factory BusSummaryModel.fromJson(Map<String, dynamic> json) {
     List<RouteStopModel>? stops;
-    
-    // Check legacy 'route' first, then 'busRoutes' array
     Map<String, dynamic>? routeObj;
     if (json['route'] is Map) {
       routeObj = Map<String, dynamic>.from(json['route'] as Map);
@@ -379,20 +431,12 @@ class BusSummaryModel with _$BusSummaryModel {
     }
 
     return BusSummaryModel(
-      id: json['id'] ?? '',
-      busNumber:
-          json['busNumber'] ??
-          json['bus_number'] ??
-          json['number'] ??
-          'Unknown',
-      latitude: (json['latitude'] ?? json['lat'] ?? 0.0).toDouble(),
-      longitude: (json['longitude'] ?? json['lng'] ?? 0.0).toDouble(),
-      status:
-          json['status'] ??
-          (json['is_delayed'] == true || json['isDelayed'] == true
-              ? 'Delayed'
-              : 'On Time'),
-      isDelayed: json['isDelayed'] ?? json['is_delayed'] ?? false,
+      id: json['id']?.toString() ?? '',
+      busNumber: json['busNumber'] ?? json['bus_number'] ?? json['number'] ?? '',
+      latitude: (json['latitude'] ?? 0.0).toDouble(),
+      longitude: (json['longitude'] ?? 0.0).toDouble(),
+      status: json['status'] ?? 'Unknown',
+      isDelayed: json['isDelayed'] ?? false,
       routeStops: stops,
     );
   }
@@ -405,7 +449,6 @@ class BusSummaryModel with _$BusSummaryModel {
       longitude: longitude,
       status: status,
       isDelayed: isDelayed,
-      routeStops: routeStops?.map((s) => s.toEntity(status)).toList(),
     );
   }
 }

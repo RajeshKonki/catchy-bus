@@ -1,5 +1,5 @@
 import '../entities/banner.dart';
 
 abstract class BannerRepository {
-  Future<List<BannerEntity>> getActiveBanners();
+  Future<List<BannerEntity>> getActiveBanners({String? collegeId});
 }

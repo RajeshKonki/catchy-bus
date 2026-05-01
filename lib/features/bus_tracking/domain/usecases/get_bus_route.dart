@@ -12,12 +12,13 @@ class GetBusRoute implements UseCase<BusRoute, GetBusRouteParams> {
 
   @override
   Future<Either<Failure, BusRoute>> call(GetBusRouteParams params) async {
-    return await repository.getBusRoute(params.busNumber);
+    return await repository.getBusRoute(params.busNumber, routeId: params.routeId);
   }
 }
 
 class GetBusRouteParams {
   final String busNumber;
+  final String? routeId;
 
-  GetBusRouteParams({required this.busNumber});
+  GetBusRouteParams({required this.busNumber, this.routeId});
 }

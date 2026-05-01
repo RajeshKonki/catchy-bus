@@ -147,8 +147,21 @@ class AuthRepositoryImpl implements AuthRepository {
 
   @override
   Future<Either<Failure, UserEntity>> getCurrentUser() async {
-    // TODO: Implement get current user from API or local storage
-    return const Left(UnknownFailure(message: 'Not implemented'));
+    if (!await networkInfo.isConnected) {
+      return const Left(NetworkFailure(message: 'No internet connection'));
+    }
+
+    try {
+      final result = await remoteDataSource.getMe();
+      if (result.user != null) {
+        return Right(result.user!.toEntity());
+      }
+      return const Left(AuthenticationFailure(message: 'Failed to fetch user profile'));
+    } on ServerException catch (e) {
+      return Left(ServerFailure(message: e.message, statusCode: e.statusCode));
+    } catch (e) {
+      return Left(UnknownFailure(message: e.toString()));
+    }
   }
 
   @override

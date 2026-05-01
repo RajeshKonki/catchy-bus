@@ -15,6 +15,9 @@ class UserEntity extends Equatable {
   final String? busNumber;
   final String? fcmToken;
   final String? studentId;
+  final String? collegeId;
+  final String? department;
+  final String? year;
 
   final bool? isMultiAccount;
   final List<UserEntity>? accounts;
@@ -32,6 +35,9 @@ class UserEntity extends Equatable {
     this.busNumber,
     this.fcmToken,
     this.studentId,
+    this.collegeId,
+    this.department,
+    this.year,
     this.isMultiAccount,
     this.accounts,
   });
@@ -50,6 +56,9 @@ class UserEntity extends Equatable {
     busNumber,
     fcmToken,
     studentId,
+    collegeId,
+    department,
+    year,
     isMultiAccount,
     accounts,
   ];

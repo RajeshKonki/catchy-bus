@@ -19,6 +19,9 @@ UserModel _$UserModelFromJson(Map json) => UserModel(
   collegeImageUrl: json['collegeImageUrl'] as String?,
   fcmToken: json['fcm_token'] as String?,
   studentId: json['studentId'] as String?,
+  collegeId: json['collegeId'] as String?,
+  department: json['department'] as String?,
+  year: json['year'] as String?,
   isMultiAccount: json['is_multi_account'] as bool?,
   accounts: (json['accounts'] as List<dynamic>?)
       ?.map((e) => UserModel.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -38,6 +41,9 @@ Map<String, dynamic> _$UserModelToJson(UserModel instance) => <String, dynamic>{
   'collegeImageUrl': instance.collegeImageUrl,
   'fcm_token': instance.fcmToken,
   'studentId': instance.studentId,
+  'collegeId': instance.collegeId,
+  'department': instance.department,
+  'year': instance.year,
   'is_multi_account': instance.isMultiAccount,
   'accounts': instance.accounts?.map((e) => e.toJson()).toList(),
 };

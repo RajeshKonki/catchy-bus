@@ -306,6 +306,18 @@ Future<void> showAttendanceNotification({
   );
 }
 
+/// Shows a notification when the bus trip is completed.
+Future<void> showTripCompletedNotification({
+  required String busNumber,
+  required bool isReverse,
+}) async {
+  final tripType = isReverse ? 'Return' : 'Morning';
+  await _LocalNotificationHelper.show(
+    title: '🏁 Trip Completed',
+    body: 'The $tripType trip for Bus $busNumber has finished. Thank you for using CatchyBus!',
+  );
+}
+
 
 final notificationServiceProvider = Provider<PushNotificationService>((ref) {
   return PushNotificationService();

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../../config/theme/app_theme.dart';
+import '../../../../core/localization/app_strings.dart';
 
 /// Result model returned when a QR code is successfully scanned
 class QrScanResult {
@@ -18,16 +20,15 @@ class QrScanResult {
   });
 }
 
-class AttendanceQrScannerPage extends StatefulWidget {
+class AttendanceQrScannerPage extends ConsumerStatefulWidget {
   const AttendanceQrScannerPage({super.key});
 
   @override
-  State<AttendanceQrScannerPage> createState() =>
+  ConsumerState<AttendanceQrScannerPage> createState() =>
       _AttendanceQrScannerPageState();
 }
 
-class _AttendanceQrScannerPageState
-    extends State<AttendanceQrScannerPage> {
+class _AttendanceQrScannerPageState extends ConsumerState<AttendanceQrScannerPage> {
   final MobileScannerController controller = MobileScannerController();
   bool _isProcessing = false;
 
@@ -38,7 +39,6 @@ class _AttendanceQrScannerPageState
   }
 
   /// Parses MECARD-formatted QR code to extract student data
-  /// MECARD format: MECARD:N:Name;ORG:College;EMAIL:...;TEL:...;NOTE:Student ID: XXX;;
   QrScanResult? _parseQrCode(String code) {
     try {
       if (!code.startsWith('MECARD:')) return null;
@@ -47,7 +47,6 @@ class _AttendanceQrScannerPageState
       String? phone;
       String? studentId;
 
-      // Split by ';' and parse each field
       final parts = code.replaceFirst('MECARD:', '').split(';');
       for (final part in parts) {
         if (part.startsWith('N:')) {
@@ -55,7 +54,6 @@ class _AttendanceQrScannerPageState
         } else if (part.startsWith('TEL:')) {
           phone = part.substring(4).trim();
         } else if (part.startsWith('NOTE:')) {
-          // Format: "Student ID: <id>"
           final note = part.substring(5).trim();
           if (note.startsWith('Student ID:')) {
             studentId = note.substring('Student ID:'.length).trim();
@@ -90,11 +88,9 @@ class _AttendanceQrScannerPageState
         final result = _parseQrCode(code);
 
         if (result != null) {
-          // Successfully parsed — return structured result
           controller.stop();
           context.pop(result);
         } else {
-          // Show error if QR is not a valid student QR
           _showInvalidQrError();
         }
       }
@@ -102,11 +98,12 @@ class _AttendanceQrScannerPageState
   }
 
   void _showInvalidQrError() {
+    final strings = ref.read(stringsProvider);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Invalid QR code. Please scan a student attendance QR.'),
+      SnackBar(
+        content: Text(strings.get('invalid_qr')),
         backgroundColor: Colors.red,
-        duration: Duration(seconds: 2),
+        duration: const Duration(seconds: 2),
       ),
     );
     Future.delayed(const Duration(seconds: 2), () {
@@ -116,17 +113,16 @@ class _AttendanceQrScannerPageState
 
   @override
   Widget build(BuildContext context) {
+    final strings = ref.watch(stringsProvider);
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Camera Feed
           MobileScanner(
             controller: controller,
             onDetect: _onDetect,
           ),
-
-          // Overlay Scrim with cut-out
           ColorFiltered(
             colorFilter: ColorFilter.mode(
               Colors.black.withOpacity(0.5),
@@ -162,34 +158,21 @@ class _AttendanceQrScannerPageState
               ],
             ),
           ),
-
-          // UI Layer
           SafeArea(
             child: Column(
               children: [
-                // Top Bar
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Row(
                     children: [
                       IconButton(
-                        icon: const Icon(
-                          Icons.close,
-                          color: Colors.white,
-                          size: 28,
-                        ),
+                        icon: const Icon(Icons.close, color: Colors.white, size: 28),
                         onPressed: () => context.pop(),
                       ),
                     ],
                   ),
                 ),
-
                 const SizedBox(height: 40),
-
-                // Title
                 Column(
                   children: [
                     Container(
@@ -205,9 +188,9 @@ class _AttendanceQrScannerPageState
                       ),
                     ),
                     const SizedBox(height: 16),
-                    const Text(
-                      'Scan Student QR',
-                      style: TextStyle(
+                    Text(
+                      strings.get('scan_student_qr'),
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
@@ -215,7 +198,7 @@ class _AttendanceQrScannerPageState
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Ask the student to show their\nattendance QR code',
+                      strings.get('scan_qr_hint'),
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.7),
@@ -225,40 +208,16 @@ class _AttendanceQrScannerPageState
                     ),
                   ],
                 ),
-
                 const Spacer(),
-
-                // Scanner Frame corners
                 SizedBox(
                   height: 290,
                   width: 290,
                   child: Stack(
                     children: [
-                      // Corner lines — top left
-                      Positioned(
-                        top: 20,
-                        left: 20,
-                        child: _buildCorner(top: true, left: true),
-                      ),
-                      // Corner lines — top right
-                      Positioned(
-                        top: 20,
-                        right: 20,
-                        child: _buildCorner(top: true, left: false),
-                      ),
-                      // Corner lines — bottom left
-                      Positioned(
-                        bottom: 20,
-                        left: 20,
-                        child: _buildCorner(top: false, left: true),
-                      ),
-                      // Corner lines — bottom right
-                      Positioned(
-                        bottom: 20,
-                        right: 20,
-                        child: _buildCorner(top: false, left: false),
-                      ),
-                      // Animated scan line
+                      Positioned(top: 20, left: 20, child: _buildCorner(top: true, left: true)),
+                      Positioned(top: 20, right: 20, child: _buildCorner(top: true, left: false)),
+                      Positioned(bottom: 20, left: 20, child: _buildCorner(top: false, left: true)),
+                      Positioned(bottom: 20, right: 20, child: _buildCorner(top: false, left: false)),
                       if (!_isProcessing)
                         Center(
                           child: TweenAnimationBuilder<double>(
@@ -269,13 +228,9 @@ class _AttendanceQrScannerPageState
                               child: Container(
                                 width: 230,
                                 height: 2,
-                                decoration: BoxDecoration(
+                                decoration: const BoxDecoration(
                                   gradient: LinearGradient(
-                                    colors: [
-                                      Colors.transparent,
-                                      AppColors.brightOrange,
-                                      Colors.transparent,
-                                    ],
+                                    colors: [Colors.transparent, AppColors.brightOrange, Colors.transparent],
                                   ),
                                 ),
                               ),
@@ -285,23 +240,16 @@ class _AttendanceQrScannerPageState
                         ),
                       if (_isProcessing)
                         const Center(
-                          child: CircularProgressIndicator(
-                            color: AppColors.brightOrange,
-                          ),
+                          child: CircularProgressIndicator(color: AppColors.brightOrange),
                         ),
                     ],
                   ),
                 ),
-
                 const Spacer(),
-
-                // Bottom Instruction
                 Padding(
                   padding: const EdgeInsets.only(bottom: 60),
                   child: Text(
-                    _isProcessing
-                        ? 'Processing...'
-                        : 'Position the QR code within the frame',
+                    _isProcessing ? strings.get('processing') : strings.get('position_qr_hint'),
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.8),
                       fontSize: 14,
@@ -317,48 +265,33 @@ class _AttendanceQrScannerPageState
   }
 
   Widget _buildCorner({required bool top, required bool left}) {
-    return SizedBox(
-      width: 30,
-      height: 30,
-      child: CustomPaint(
-        painter: _CornerPainter(top: top, left: left),
-      ),
-    );
+    return SizedBox(width: 30, height: 30, child: CustomPaint(painter: _CornerPainter(top: top, left: left)));
   }
 }
 
 class _CornerPainter extends CustomPainter {
   final bool top;
   final bool left;
-
   _CornerPainter({required this.top, required this.left});
-
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = AppColors.brightOrange
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
+    final paint = Paint()..color = AppColors.brightOrange..strokeWidth = 3..style = PaintingStyle.stroke..strokeCap = StrokeCap.round;
     final double w = size.width;
     final double h = size.height;
-
     if (top && left) {
-      canvas.drawLine(Offset(0, h), Offset(0, 0), paint);
-      canvas.drawLine(Offset(0, 0), Offset(w, 0), paint);
+      canvas.drawLine(Offset(0, h), const Offset(0, 0), paint);
+      canvas.drawLine(const Offset(0, 0), Offset(w, 0), paint);
     } else if (top && !left) {
-      canvas.drawLine(Offset(0, 0), Offset(w, 0), paint);
+      canvas.drawLine(const Offset(0, 0), Offset(w, 0), paint);
       canvas.drawLine(Offset(w, 0), Offset(w, h), paint);
     } else if (!top && left) {
-      canvas.drawLine(Offset(0, 0), Offset(0, h), paint);
+      canvas.drawLine(const Offset(0, 0), Offset(0, h), paint);
       canvas.drawLine(Offset(0, h), Offset(w, h), paint);
     } else {
       canvas.drawLine(Offset(w, 0), Offset(w, h), paint);
       canvas.drawLine(Offset(0, h), Offset(w, h), paint);
     }
   }
-
   @override
   bool shouldRepaint(_CornerPainter oldDelegate) => false;
 }

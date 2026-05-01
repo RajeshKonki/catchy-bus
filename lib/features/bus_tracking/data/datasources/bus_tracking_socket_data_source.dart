@@ -20,7 +20,7 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
     String? token,
   });
   @override
-  Future<BusRouteModel> getBusRoute(String busNumber) async {
+  Future<BusRouteModel> getBusRoute(String busNumber, {String? routeId}) async {
     try {
       final response = await dioClient.get(
         ApiConstants.busRoute(Uri.encodeComponent(busNumber)),
@@ -28,7 +28,7 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
       final prefs = await SharedPreferences.getInstance();
       return BusRouteModel.fromJson(
         response.data, 
-        preferredRouteId: prefs.getString('last_selected_route_id')
+        preferredRouteId: routeId ?? prefs.getString('last_selected_route_id')
       );
     } catch (e) {
       rethrow;
@@ -164,6 +164,8 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
             nextStop: data['nextStop'],
             isOnTime: data['isOnTime'] as bool?,
             delayMinutes: data['delayMinutes'] as int?,
+            isTripActive: data['isTripActive'] as bool?,
+            isReverse: data['isReverse'] as bool?,
             students: students?.map((s) => Map<String, dynamic>.from(s)).toList(),
           ),
         );
@@ -200,14 +202,14 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
     void onLocationUpdateForTripActive(dynamic data) {
       if (data is Map && data.containsKey('isTripActive') && !controller.isClosed) {
         final isActive = data['isTripActive'] == true;
-        if (isActive) {
-          print('DEBUG: [StudentSocket] isTripActive=true seen in bus_location_update → forwarding as trip signal');
-        } else {
-          print('DEBUG: [StudentSocket] isTripActive=false seen in bus_location_update → forwarding trip-ended signal');
-        }
+        // ONLY include isReverse if the packet explicitly provides it
+        final hasReverse = data.containsKey('isReverse') || data.containsKey('is_reverse');
+        final isReverse = (data['isReverse'] ?? data['is_reverse']) == true;
+        
         controller.add({
           'busId': busNumber,
           'isTripActive': isActive,
+          if (hasReverse) 'isReverse': isReverse,
           'status': isActive ? 'STARTED' : 'ENDED',
         });
       }

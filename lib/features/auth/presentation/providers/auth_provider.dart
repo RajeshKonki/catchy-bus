@@ -166,6 +166,27 @@ class AuthNotifier extends StateNotifier<AuthState> {
     );
   }
 
+  /// Refresh profile from server
+  Future<void> refreshProfile() async {
+    final result = await authRepository.getCurrentUser();
+    result.fold(
+      (failure) {
+        // Silently fail if refresh fails, or you could show an error
+        print('Profile refresh failed: ${failure.message}');
+      },
+      (user) async {
+        // Update local storage
+        await _prefs.setString(
+          AppConstants.keyUserData,
+          jsonEncode(UserModel.fromEntity(user).toJson()),
+        );
+        
+        // Update state
+        state = state.copyWith(user: user);
+      },
+    );
+  }
+
   /// Select one of the multiple accounts
   Future<void> selectAccount(String userId) async {
     // Attempt recovery from existing state/firebase if metadata is missing

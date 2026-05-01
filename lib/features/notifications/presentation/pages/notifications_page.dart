@@ -31,11 +31,15 @@ class NotificationsPage extends ConsumerWidget {
         ),
         actions: [
           if (notificationState is NotificationsLoaded &&
-              notificationState.notifications.any((n) => !n.isRead))
+              notificationState.notifications.isNotEmpty)
             TextButton(
-              onPressed: () =>
-                  ref.read(notificationsProvider.notifier).markAllAsRead(),
-              child: const Text('Mark all as read'),
+              onPressed: () => ref
+                  .read(notificationsProvider.notifier)
+                  .deleteAllNotifications(),
+              child: const Text(
+                'Clear all',
+                style: TextStyle(color: Colors.red),
+              ),
             ),
         ],
       ),
@@ -67,7 +71,39 @@ class NotificationsPage extends ConsumerWidget {
       );
     } else if (state is NotificationsLoaded) {
       if (state.notifications.isEmpty) {
-        return const Center(child: Text('No notifications yet.'));
+        return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.notifications_none_rounded,
+                  size: 64,
+                  color: Colors.grey[400],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'All caught up!',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[700],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'You have no new notifications.',
+                style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+              ),
+            ],
+          ),
+        );
       }
       return ListView.separated(
         itemCount: state.notifications.length,
@@ -78,11 +114,9 @@ class NotificationsPage extends ConsumerWidget {
           return _NotificationItem(
             notification: notification,
             onTap: () {
-              if (!notification.isRead) {
-                ref
-                    .read(notificationsProvider.notifier)
-                    .markAsRead(notification.id);
-              }
+              ref
+                  .read(notificationsProvider.notifier)
+                  .deleteNotification(notification.id);
             },
           );
         },
@@ -103,7 +137,7 @@ class _NotificationItem extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Container(
-        color: !notification.isRead ? const Color(0xFF2E5AAC).withOpacity(0.05) : Colors.white,
+        color: Colors.white,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -111,16 +145,13 @@ class _NotificationItem extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: !notification.isRead
-                    ? const Color(0xFFE9F0FD)
-                    : const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(8),
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[100]!),
               ),
-              child: Icon(
+              child: const Icon(
                 Icons.directions_bus_outlined,
-                color: !notification.isRead
-                    ? const Color(0xFF2E5AAC)
-                    : Colors.grey[400],
+                color: Color(0xFF2E5AAC),
                 size: 24,
               ),
             ),
@@ -131,32 +162,30 @@ class _NotificationItem extends StatelessWidget {
                 children: [
                   Text(
                     notification.title,
-                    style: TextStyle(
-                      color: !notification.isRead ? Colors.black : Colors.grey[700],
+                    style: const TextStyle(
+                      color: Colors.black,
                       fontSize: 16,
-                      fontWeight: !notification.isRead ? FontWeight.bold : FontWeight.w500,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _getTimeAgo(notification.createdAt),
-                    style: TextStyle(
-                      color: Colors.grey[500],
-                      fontSize: 14,
-                    ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(Icons.access_time, size: 14, color: Colors.grey[400]),
+                      const SizedBox(width: 4),
+                      Text(
+                        _getTimeAgo(notification.createdAt),
+                        style: TextStyle(
+                          color: Colors.grey[500],
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
-            if (!notification.isRead)
-               Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF2E5AAC),
-                  shape: BoxShape.circle,
-                ),
-              ),
+            Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey[300]),
           ],
         ),
       ),

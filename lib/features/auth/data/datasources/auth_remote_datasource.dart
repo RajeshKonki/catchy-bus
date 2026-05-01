@@ -25,6 +25,7 @@ abstract class AuthRemoteDataSource {
   Future<void> updateFcmToken(String fcmToken);
   Future<void> updateNotificationSettings(Map<String, bool> settings);
   Future<bool> checkPhoneInSystem(String phone, String role);
+  Future<AuthResponseModel> getMe();
 }
 
 /// Implementation of AuthRemoteDataSource
@@ -200,6 +201,28 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
       if (e is ServerException) {
         rethrow;
       }
+      throw ServerException(message: e.toString(), statusCode: null);
+    }
+  }
+  
+  @override
+  Future<AuthResponseModel> getMe() async {
+    try {
+      final response = await dioClient.get(ApiConstants.me);
+      if (response.statusCode == 200) {
+        return AuthResponseModel.fromJson(response.data);
+      } else {
+        throw ServerException(
+          message: 'Failed to fetch profile',
+          statusCode: response.statusCode,
+        );
+      }
+    } on DioException catch (e) {
+      throw ServerException(
+        message: e.response?.data['message'] ?? 'Connection error',
+        statusCode: e.response?.statusCode,
+      );
+    } catch (e) {
       throw ServerException(message: e.toString(), statusCode: null);
     }
   }

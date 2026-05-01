@@ -19,6 +19,8 @@ import '../../features/driver/presentation/pages/attendance_qr_scanner_page.dart
 import '../../features/auth/presentation/pages/otp_verification_page.dart';
 import '../../features/auth/domain/entities/user_entity.dart';
 
+final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+
 /// App routes configuration using GoRouter
 class AppRouter {
   static const String login = '/login';
@@ -90,6 +92,7 @@ class AppRouter {
             routeName: extra?['routeName'] as String?,
             driverLat: extra?['driverLat'] as double?,
             driverLng: extra?['driverLng'] as double?,
+            isReverse: extra?['isReverse'] as bool? ?? false,
           );
         },
       ),
@@ -105,11 +108,13 @@ class AppRouter {
         path: busTracking,
         name: 'bus-tracking',
         builder: (context, state) {
-          if (state.extra is Map<String, String?>) {
-            final data = state.extra as Map<String, String?>;
+          if (state.extra is Map<String, dynamic>) {
+            final data = state.extra as Map<String, dynamic>;
             return BusTrackingHomePage(
-              busNumber: data['busNumber'],
-              studentName: data['studentName'],
+              busNumber: data['busNumber'] as String?,
+              studentName: data['studentName'] as String?,
+              isReverse: data['isReverse'] as bool?,
+              routeId: data['routeId'] as String?,
             );
           }
           return BusTrackingHomePage(
@@ -169,5 +174,6 @@ class AppRouter {
     ],
     errorBuilder: (context, state) =>
         Scaffold(body: Center(child: Text('Page not found: ${state.uri}'))),
+    observers: [routeObserver],
   );
 }

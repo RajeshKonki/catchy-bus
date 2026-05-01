@@ -2,7 +2,9 @@ import 'package:dio/dio.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class MapsService {
-  final Dio _dio = Dio();
+  final Dio _dio = Dio()
+    ..options.connectTimeout = const Duration(seconds: 15)
+    ..options.receiveTimeout = const Duration(seconds: 15);
   final String _apiKey = "AIzaSyDxrMKyHgfbv_P_pQoYJogXvAzGCI7Ah_0";
 
   Future<List<LatLng>> getDirections({
@@ -114,4 +116,22 @@ class MapsService {
     }
     return polyline;
   }
+
+  static const String cleanMapStyle = r'''
+[
+  {
+    "featureType": "poi",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "transit",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "road",
+    "elementType": "labels.icon",
+    "stylers": [{"visibility": "off"}]
+  }
+]
+''';
 }

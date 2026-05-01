@@ -3,7 +3,7 @@ import '../models/bus_route_model.dart';
 /// Mock data source for bus tracking
 /// In production, this would be replaced with actual API calls
 abstract class BusTrackingRemoteDataSource {
-  Future<BusRouteModel> getBusRoute(String busNumber);
+  Future<BusRouteModel> getBusRoute(String busNumber, {String? routeId});
   Future<List<BusSummaryModel>> getAvailableBuses();
   Future<List<RouteStopModel>> getAllCollegeStops();
   Future<void> submitSupportQuery({
@@ -19,7 +19,7 @@ abstract class BusTrackingRemoteDataSource {
 
 class BusTrackingRemoteDataSourceImpl implements BusTrackingRemoteDataSource {
   @override
-  Future<BusRouteModel> getBusRoute(String busNumber) async {
+  Future<BusRouteModel> getBusRoute(String busNumber, {String? routeId}) async {
     // Simulate network delay
     await Future.delayed(const Duration(milliseconds: 500));
 
