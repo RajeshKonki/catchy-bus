@@ -26,10 +26,20 @@ class MapsService {
     try {
       final url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
       final Map<String, dynamic> data = {
-        'origin': {'location': {'latLng': {'latitude': origin.latitude, 'longitude': origin.longitude}}},
-        'destination': {'location': {'latLng': {'latitude': destination.latitude, 'longitude': destination.longitude}}},
+        'origin': {
+          'location': {'latLng': {'latitude': origin.latitude, 'longitude': origin.longitude}},
+          'sideOfRoad': false
+        },
+        'destination': {
+          'location': {'latLng': {'latitude': destination.latitude, 'longitude': destination.longitude}},
+          'sideOfRoad': false
+        },
         if (waypoints != null && waypoints.isNotEmpty)
-          'intermediates': waypoints.map((w) => {'location': {'latLng': {'latitude': w.latitude, 'longitude': w.longitude}}}).toList(),
+          'intermediates': waypoints.map((w) => {
+            'location': {'latLng': {'latitude': w.latitude, 'longitude': w.longitude}},
+            'via': true,
+            'sideOfRoad': false
+          }).toList(),
         'travelMode': 'DRIVE',
         'routingPreference': 'TRAFFIC_AWARE',
         'polylineQuality': 'OVERVIEW',
@@ -124,7 +134,31 @@ class MapsService {
     "stylers": [{"visibility": "off"}]
   },
   {
+    "featureType": "poi.business",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi.medical",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi.school",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi.place_of_worship",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
     "featureType": "transit",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "transit.station",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "landscape.man_made",
     "stylers": [{"visibility": "off"}]
   },
   {

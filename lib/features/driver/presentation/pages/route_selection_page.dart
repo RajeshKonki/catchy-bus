@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -66,42 +65,117 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
   String? _error;
   bool _checkingLocation = false;
   bool _isRedirecting = false;
+  bool _checkingActiveTrip =
+      true; // Shows loading while we check for an active trip
 
-  late AnimationController _headerAnimController;
   late AnimationController _listAnimController;
-  late Animation<double> _headerFadeAnim;
-  late Animation<Offset> _headerSlideAnim;
 
   @override
   void initState() {
     super.initState();
 
-    _headerAnimController = AnimationController(
-      duration: const Duration(milliseconds: 700),
-      vsync: this,
-    );
     _listAnimController = AnimationController(
       duration: const Duration(milliseconds: 500),
       vsync: this,
     );
 
-    _headerFadeAnim = CurvedAnimation(
-      parent: _headerAnimController,
-      curve: Curves.easeOut,
-    );
-    _headerSlideAnim =
-        Tween<Offset>(begin: const Offset(0, -0.3), end: Offset.zero).animate(
-          CurvedAnimation(parent: _headerAnimController, curve: Curves.easeOut),
-        );
+    // First, check if there's already an active trip on the server.
+    // We do this BEFORE fetching routes so the driver is taken straight
+    // to the active trip without ever seeing the route selection UI.
+    _checkAndRedirectActiveTrip();
+  }
 
-    _headerAnimController.forward();
+  Future<void> _checkAndRedirectActiveTrip() async {
+    final user = ref.read(authProvider).user;
+    final busNumber = user?.busNumber;
 
+    if (busNumber == null) {
+      if (mounted) setState(() => _checkingActiveTrip = false);
+      _fetchRoutes();
+      return;
+    }
+
+    try {
+      final dioClient = getIt<DioClient>();
+      final response = await dioClient.get(
+        'buses/number/${Uri.encodeComponent(busNumber)}',
+      );
+      final json = response.data as Map<String, dynamic>?;
+      if (json != null) {
+        final isTripActive = json['isTripActive'] == true || 
+            json['isTripActive']?.toString().toLowerCase() == 'true' || 
+            json['is_trip_active'] == true || 
+            json['is_trip_active']?.toString().toLowerCase() == 'true';
+            
+        final trips = json['trips'] as List? ?? [];
+        Map<String, dynamic>? activeTrip;
+        for (var t in trips) {
+          if (t != null && t['status']?.toString().toUpperCase() == 'STARTED') {
+            activeTrip = t as Map<String, dynamic>?;
+            break;
+          }
+        }
+
+        if ((isTripActive || activeTrip != null) && mounted && !_isRedirecting) {
+          final routeId = activeTrip?['routeId']?.toString() ?? json['routeId']?.toString() ?? '';
+          
+          String? matchedRouteName;
+          if (activeTrip != null && activeTrip['routeName'] != null) {
+            matchedRouteName = activeTrip['routeName'].toString();
+          } else {
+            final routes = json['routes'] as List? ?? [];
+            for (var r in routes) {
+              if (r != null && r['id']?.toString() == routeId) {
+                matchedRouteName = r['name']?.toString();
+                break;
+              }
+            }
+          }
+          final routeName = matchedRouteName ?? json['route']?['name']?.toString() ?? 'Active Trip';
+          
+          final isReverse =
+              activeTrip?['direction']?.toString().toUpperCase() == 'REVERSE' ||
+              activeTrip?['direction']?.toString().toUpperCase() == 'RETURN' ||
+              activeTrip?['isReverse'] == true ||
+              activeTrip?['is_reverse'] == true ||
+              json['isReverse'] == true || 
+              json['is_reverse'] == true;
+
+          Log.i(
+            'Found active trip on restart: routeId=$routeId, isReverse=$isReverse',
+          );
+          _isRedirecting = true;
+          await context.push(
+            AppRouter.tripTracking,
+            extra: {
+              'routeId': routeId,
+              'routeName': routeName,
+              'isReverse': isReverse,
+              'isResuming': true,
+            },
+          );
+          if (mounted) {
+            setState(() {
+              _isRedirecting = false;
+              _checkingActiveTrip = false;
+            });
+            _fetchRoutes();
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      Log.w('Could not check for active trip on startup: $e');
+    }
+
+    if (mounted) {
+      setState(() => _checkingActiveTrip = false);
+    }
     _fetchRoutes();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final user = ref.read(authProvider).user;
-      final busNumber = user?.busNumber;
-      if (user != null && busNumber != null) {
-        ref.read(busTrackingProvider.notifier).loadBusRoute(busNumber);
+      final busNumber2 = ref.read(authProvider).user?.busNumber;
+      if (busNumber2 != null && !_isRedirecting) {
+        ref.read(busTrackingProvider.notifier).loadBusRoute(busNumber2);
       }
     });
   }
@@ -114,12 +188,16 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
 
   @override
   void didPopNext() {
-    Log.i('Returning to RouteSelectionPage - refreshing routes and resetting state');
+    Log.i(
+      'Returning to RouteSelectionPage - refreshing routes and resetting state',
+    );
     _fetchRoutes();
     if (mounted) {
       setState(() {
         _checkingLocation = false;
         _isRedirecting = false;
+        _checkingActiveTrip =
+            false; // No active trip if the driver just came back
       });
     }
   }
@@ -130,7 +208,7 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
     bool isReverse,
   ) async {
     if (_isRedirecting || !mounted) return;
-    
+
     Log.i('Redirecting to existing active trip: $routeId ($routeName)');
     _isRedirecting = true;
 
@@ -141,6 +219,7 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
           'routeId': routeId,
           'routeName': routeName,
           'isReverse': isReverse,
+          'isResuming': true,
         },
       );
     } catch (e) {
@@ -153,7 +232,6 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
-    _headerAnimController.dispose();
     _listAnimController.dispose();
     super.dispose();
   }
@@ -175,7 +253,12 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
           .toList();
 
       final prefs = await SharedPreferences.getInstance();
-      final lastRouteId = prefs.getString('last_selected_route_id');
+      String? lastRouteId = prefs.getString('last_selected_route_id');
+      if (lastRouteId == 'null' ||
+          lastRouteId == 'undefined' ||
+          lastRouteId == '') {
+        lastRouteId = null;
+      }
 
       if (mounted) {
         setState(() {
@@ -243,7 +326,8 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
             ),
             const SizedBox(height: 8),
             Text(
-              strings.get('direction_hint') ?? 'Choose your journey direction to start tracking.',
+              strings.get('direction_hint') ??
+                  'Choose your journey direction to start tracking.',
               style: const TextStyle(
                 color: Color(0xFF64748B),
                 fontWeight: FontWeight.w500,
@@ -350,10 +434,31 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
 
     permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
+      // PROMINENT DISCLOSURE: Required by Google Play for background location usage.
+      final bool disclosureAccepted = await UIHelpers.showLocationDisclosure(
+        context,
+        title: 'Background Location Access',
+        message:
+            'CatchyBus collects location data to track the bus and provide real-time ETA to students, even when the app is closed or not in use. This data is essential for the bus tracking feature to work reliably.',
+      );
+
+      if (!disclosureAccepted) {
+        if (mounted) {
+          UIHelpers.showWarningTooltip(
+            context,
+            'Location access is required for trip tracking.',
+          );
+        }
+        return false;
+      }
+
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
         if (mounted) {
-          UIHelpers.showErrorTooltip(context, 'Location permissions are denied.');
+          UIHelpers.showErrorTooltip(
+            context,
+            'Location permissions are denied.',
+          );
         }
         return false;
       }
@@ -372,27 +477,53 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
     return true;
   }
 
-  Future<void> _verifyAndStartTrip(DriverRouteOption route, bool isReverse) async {
-    final strings = ref.read(stringsProvider);
-    
+  Future<void> _verifyAndStartTrip(
+    DriverRouteOption route,
+    bool isReverse,
+  ) async {
     if (!(await _checkPermission())) return;
 
     setState(() => _checkingLocation = true);
 
     try {
-      Log.i('Starting distance check for ${isReverse ? "RETURN" : "FORWARD"} trip on route ${route.name}');
-      
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+      Log.i(
+        'Starting distance check for ${isReverse ? "RETURN" : "FORWARD"} trip on route ${route.name}',
       );
+
+      // Add a timeout to prevent infinite loading if GPS is struggling
+      final position =
+          await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high,
+            timeLimit: const Duration(seconds: 10),
+          ).catchError((e) async {
+            Log.w(
+              'GPS timeout or error: $e. Falling back to last known position.',
+            );
+            return await Geolocator.getLastKnownPosition() ??
+                Position(
+                  latitude: 0,
+                  longitude: 0,
+                  timestamp: DateTime.now(),
+                  accuracy: 0,
+                  altitude: 0,
+                  heading: 0,
+                  speed: 0,
+                  speedAccuracy: 0,
+                  altitudeAccuracy: 0,
+                  headingAccuracy: 0,
+                );
+          });
 
       final targetLat = isReverse ? route.endLat : route.startLat;
       final targetLng = isReverse ? route.endLng : route.startLng;
 
       if (targetLat == null || targetLng == null) {
-        Log.w('Route coordinates are missing for ${isReverse ? "end" : "start"} point. Proceeding without geofence.');
+        Log.w(
+          'Route coordinates are missing for ${isReverse ? "end" : "start"} point. Proceeding without geofence.',
+        );
+        if (mounted) setState(() => _checkingLocation = false);
         await _proceedToTracking(
-          position, 
+          position,
           isReverse,
           routeId: route.id,
           routeName: route.name,
@@ -412,12 +543,14 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
       // 1000m geofence
       if (distance > 1000) {
         if (mounted) {
+          setState(() => _checkingLocation = false);
           _showGeofenceError(distance, isReverse, targetLat, targetLng);
         }
       } else {
         Log.i('Distance check passed. Proceeding to tracking...');
+        if (mounted) setState(() => _checkingLocation = false);
         await _proceedToTracking(
-          position, 
+          position,
           isReverse,
           routeId: route.id,
           routeName: route.name,
@@ -426,10 +559,9 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
     } catch (e) {
       Log.e('Geofence verification error: $e');
       if (mounted) {
+        setState(() => _checkingLocation = false);
         UIHelpers.showErrorTooltip(context, 'Error: $e');
       }
-    } finally {
-      if (mounted) setState(() => _checkingLocation = false);
     }
   }
 
@@ -477,8 +609,8 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
               const SizedBox(height: 12),
               Text(
                 isReverse
-                    ? 'You are currently ${distance.round()}m away from the return journey starting point.'
-                    : 'You are currently ${distance.round()}m away from the trip starting point.',
+                    ? 'You are currently ${UIHelpers.formatDistance(distance / 1000)} (${distance.round()}m) away from the return journey starting point.'
+                    : 'You are currently ${UIHelpers.formatDistance(distance / 1000)} (${distance.round()}m) away from the trip starting point.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 14,
@@ -509,42 +641,6 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _proceedToTracking(
-                          Position(
-                            longitude: targetLng,
-                            latitude: targetLat,
-                            timestamp: DateTime.now(),
-                            accuracy: 0,
-                            altitude: 0,
-                            heading: 0,
-                            speed: 0,
-                            speedAccuracy: 0,
-                            altitudeAccuracy: 0,
-                            headingAccuracy: 0,
-                          ),
-                          isReverse,
-                        );
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1E293B),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        elevation: 0,
-                      ),
-                      child: const Text(
-                        'Start Anyway',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ],
@@ -554,15 +650,22 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
     );
   }
 
-  Future<void> _proceedToTracking(Position position, bool isReverse, {String? routeId, String? routeName}) async {
+  Future<void> _proceedToTracking(
+    Position position,
+    bool isReverse, {
+    String? routeId,
+    String? routeName,
+  }) async {
     final targetRouteId = routeId ?? _selected?.id;
     final targetRouteName = routeName ?? _selected?.name;
 
     if (targetRouteId == null || _isRedirecting) {
-      Log.w('Cannot proceed to tracking: routeId=$targetRouteId, isRedirecting=$_isRedirecting');
+      Log.w(
+        'Cannot proceed to tracking: routeId=$targetRouteId, isRedirecting=$_isRedirecting',
+      );
       return;
     }
-    
+
     _isRedirecting = true;
 
     try {
@@ -570,7 +673,7 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
       await prefs.setString('last_selected_route_id', targetRouteId);
 
       if (!mounted) return;
-      
+
       await context.push(
         AppRouter.tripTracking,
         extra: {
@@ -619,42 +722,88 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
       },
       child: Scaffold(
         backgroundColor: const Color(0xFFF8FAFC),
-        body: CustomScrollView(
-          slivers: [
-            _buildSliverHeader(strings, currentLang),
-            if (_loading)
-              SliverFillRemaining(child: _buildLoadingState(strings))
-            else if (_error != null)
-              SliverFillRemaining(child: _buildErrorState(strings))
-            else ...[
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                sliver: SliverToBoxAdapter(
-                  child: Text(
-                    strings.get('select_route_hint'),
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFF64748B),
-                      height: 1.6,
-                      fontWeight: FontWeight.w300,
+        body: _checkingActiveTrip
+            ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryYellow.withOpacity(0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const CircularProgressIndicator(
+                        color: AppColors.deepBlue,
+                        strokeWidth: 3,
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 20),
+                    Text(
+                      _isRedirecting
+                          ? 'Resuming trip...'
+                          : 'Checking status...',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF475569),
+                      ),
+                    ),
+                  ],
                 ),
+              )
+            : CustomScrollView(
+                slivers: [
+                  _buildSliverHeader(strings, currentLang),
+                  if (_loading)
+                    SliverFillRemaining(child: _buildLoadingState(strings))
+                  else if (_error != null)
+                    SliverFillRemaining(child: _buildErrorState(strings))
+                  else ...[
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              strings.get('select_route'),
+                              style: const TextStyle(
+                                color: Color(0xFF1E293B),
+                                fontWeight: FontWeight.w800,
+                                fontSize: 28,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              strings.get('select_route_hint'),
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF64748B),
+                                height: 1.5,
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(24, 16, 24, 120),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) =>
+                              _buildRouteCard(_routes[index], index),
+                          childCount: _routes.length,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 120),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => _buildRouteCard(_routes[index], index),
-                    childCount: _routes.length,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
         floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-        floatingActionButton: _loading || _error != null
+        floatingActionButton: _loading || _error != null || _checkingActiveTrip
             ? null
             : _buildStartButton(strings),
       ),
@@ -663,8 +812,18 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
 
   Widget _buildSliverHeader(AppStrings strings, AppLanguage currentLang) {
     return SliverAppBar(
-      expandedHeight: 140,
+      pinned: true,
+      floating: true,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      backgroundColor: const Color(0xFFF8FAFC),
       automaticallyImplyLeading: false,
+      centerTitle: false,
+      title: Image.asset(
+        'assets/icons/catchy_logo.png',
+        height: 32,
+        fit: BoxFit.contain,
+      ),
       actions: [
         _buildLangToggle(currentLang),
         const SizedBox(width: 8),
@@ -685,49 +844,14 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
         ),
         const SizedBox(width: 12),
       ],
-      flexibleSpace: FlexibleSpaceBar(
-        titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
-        centerTitle: false,
-        title: SlideTransition(
-          position: _headerSlideAnim,
-          child: FadeTransition(
-            opacity: _headerFadeAnim,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  strings.get('select_route'),
-                  style: const TextStyle(
-                    color: Color(0xFF1E293B),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 22,
-                    letterSpacing: -0.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        background: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [AppColors.primaryYellow.withOpacity(0.08), Colors.white],
-            ),
-          ),
-        ),
-      ),
     );
   }
 
   Widget _buildLangToggle(AppLanguage currentLang) {
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFFE2E8F0),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -752,16 +876,16 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
       onTap: () => ref.read(languageProvider.notifier).setLanguage(lang),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: isSelected ? AppColors.deepBlue : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.white : const Color(0xFF64748B),
-            fontSize: 12,
+            color: isSelected ? Colors.white : const Color(0xFF475569),
+            fontSize: 11,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -775,9 +899,9 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: AppColors.primaryYellow.withOpacity(0.15),
+              color: AppColors.primaryYellow.withOpacity(0.12),
               shape: BoxShape.circle,
             ),
             child: const CircularProgressIndicator(
@@ -785,13 +909,13 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
               strokeWidth: 3,
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
           Text(
             strings.get('loading_routes'),
             style: const TextStyle(
               color: Color(0xFF64748B),
               fontWeight: FontWeight.w600,
-              fontSize: 15,
+              fontSize: 14,
             ),
           ),
         ],
@@ -808,17 +932,17 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
           children: [
             Container(
               padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF2F2),
+              decoration: const BoxDecoration(
+                color: Color(0xFFFEF2F2),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
                 Icons.wifi_off_rounded,
-                size: 40,
+                size: 36,
                 color: Color(0xFFEF4444),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
             const Text(
               'Could not load routes',
               style: TextStyle(
@@ -837,10 +961,10 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
                 height: 1.5,
               ),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 24),
             ElevatedButton.icon(
               onPressed: _fetchRoutes,
-              icon: const Icon(Icons.refresh_rounded, size: 18),
+              icon: const Icon(Icons.refresh_rounded, size: 16),
               label: Text(
                 strings.get('retry'),
                 style: const TextStyle(fontWeight: FontWeight.w700),
@@ -849,12 +973,12 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
                 backgroundColor: AppColors.brightOrange,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 elevation: 0,
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 28,
-                  vertical: 14,
+                  horizontal: 24,
+                  vertical: 12,
                 ),
               ),
             ),
@@ -877,7 +1001,7 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
         return Opacity(
           opacity: curvedProgress,
           child: Transform.translate(
-            offset: Offset(0, 30 * (1 - curvedProgress)),
+            offset: Offset(0, 20 * (1 - curvedProgress)),
             child: child,
           ),
         );
@@ -885,52 +1009,50 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
       child: GestureDetector(
         onTap: () => setState(() => _selected = route),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
           margin: const EdgeInsets.only(bottom: 16),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: isSelected
-                  ? AppColors.primaryYellow
-                  : const Color(0xFFF1F5F9),
-              width: isSelected ? 2 : 1.5,
+              color: isSelected ? AppColors.deepBlue : const Color(0xFFE2E8F0),
+              width: isSelected ? 2 : 1,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: isSelected
+                    ? AppColors.deepBlue.withOpacity(0.06)
+                    : Colors.black.withOpacity(0.02),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(18),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Bus icon with animated background
                 AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  width: 52,
-                  height: 52,
+                  duration: const Duration(milliseconds: 250),
+                  width: 48,
+                  height: 48,
                   decoration: BoxDecoration(
-                    gradient: isSelected
-                        ? LinearGradient(
-                            colors: [
-                              AppColors.primaryYellow,
-                              AppColors.primaryYellow.withOpacity(0.8),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          )
-                        : null,
-                    color: isSelected ? null : const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(16),
+                    color: isSelected
+                        ? AppColors.deepBlue.withOpacity(0.1)
+                        : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(
                     Icons.directions_bus_rounded,
                     color: isSelected
-                        ? AppColors.darkCharcoal
-                        : const Color(0xFF94A3B8),
-                    size: 26,
+                        ? AppColors.deepBlue
+                        : const Color(0xFF64748B),
+                    size: 24,
                   ),
                 ),
                 const SizedBox(width: 16),
-                // Route info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -939,41 +1061,45 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
                         route.name,
                         style: TextStyle(
                           fontSize: 16,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w700,
                           color: isSelected
                               ? AppColors.deepBlue
                               : const Color(0xFF1E293B),
                           letterSpacing: -0.3,
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 12),
                       _buildRouteStops(route),
                     ],
                   ),
                 ),
                 const SizedBox(width: 12),
-                // Selection indicator
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: isSelected ? AppColors.deepBlue : Colors.transparent,
-                    border: Border.all(
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
                       color: isSelected
                           ? AppColors.deepBlue
-                          : const Color(0xFFE2E8F0),
-                      width: 2,
+                          : Colors.transparent,
+                      border: Border.all(
+                        color: isSelected
+                            ? AppColors.deepBlue
+                            : const Color(0xFFCBD5E1),
+                        width: 1.5,
+                      ),
                     ),
+                    child: isSelected
+                        ? const Icon(
+                            Icons.check_rounded,
+                            color: Colors.white,
+                            size: 14,
+                          )
+                        : null,
                   ),
-                  child: isSelected
-                      ? const Icon(
-                          Icons.check_rounded,
-                          color: Colors.white,
-                          size: 16,
-                        )
-                      : null,
                 ),
               ],
             ),
@@ -984,57 +1110,64 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
   }
 
   Widget _buildRouteStops(DriverRouteOption route) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Start dot
-        Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: const Color(0xFF10B981),
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            route.startPoint,
-            style: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFF64748B),
-              fontWeight: FontWeight.w600,
+        Row(
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(
+                color: Color(0xFF10B981),
+                shape: BoxShape.circle,
+              ),
             ),
-            overflow: TextOverflow.ellipsis,
-          ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                route.startPoint,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF475569),
+                  fontWeight: FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          child: Icon(
-            Icons.arrow_forward_rounded,
-            size: 12,
-            color: Colors.grey[400],
+          padding: const EdgeInsets.only(left: 3.5),
+          child: Container(
+            width: 1,
+            height: 14,
+            color: const Color(0xFFE2E8F0),
           ),
         ),
-        // End dot
-        Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: const Color(0xFFF59E0B),
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            route.endPoint,
-            style: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFF64748B),
-              fontWeight: FontWeight.w600,
+        Row(
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(
+                color: Color(0xFFEF4444),
+                shape: BoxShape.circle,
+              ),
             ),
-            overflow: TextOverflow.ellipsis,
-          ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                route.endPoint,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF475569),
+                  fontWeight: FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1044,63 +1177,62 @@ class _RouteSelectionPageState extends ConsumerState<RouteSelectionPage>
     final canStart = _selected != null && !_checkingLocation;
     return Container(
       width: double.infinity,
-      height: 64,
+      height: 56,
       margin: const EdgeInsets.symmetric(horizontal: 24),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: canStart
-              ? const LinearGradient(
-                  colors: [AppColors.primaryYellow, Color(0xFFEAB308)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                )
-              : null,
-          color: canStart ? null : const Color(0xFFE2E8F0),
-        ),
-        child: ElevatedButton(
-          onPressed: canStart ? _handleStartTrip : null,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            foregroundColor: Colors.white,
-            disabledBackgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
-          ),
-          child: _checkingLocation
-              ? const SizedBox(
-                  height: 24,
-                  width: 24,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2.5,
-                  ),
-                )
-              : Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.navigation_rounded,
-                      color: canStart ? Colors.white : const Color(0xFF94A3B8),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      strings.get('start_trip'),
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        color: canStart
-                            ? Colors.white
-                            : const Color(0xFF94A3B8),
-                        letterSpacing: 0.3,
-                      ),
-                    ),
-                  ],
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: canStart
+            ? [
+                BoxShadow(
+                  color: AppColors.deepBlue.withOpacity(0.15),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
                 ),
+              ]
+            : null,
+      ),
+      child: ElevatedButton(
+        onPressed: canStart ? _handleStartTrip : null,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: canStart
+              ? AppColors.deepBlue
+              : const Color(0xFFE2E8F0),
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: const Color(0xFFE2E8F0),
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          elevation: 0,
         ),
+        child: _checkingLocation
+            ? const SizedBox(
+                height: 24,
+                width: 24,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2.5,
+                ),
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.navigation_rounded,
+                    color: canStart ? Colors.white : const Color(0xFF94A3B8),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    strings.get('start_trip'),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: canStart ? Colors.white : const Color(0xFF94A3B8),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }

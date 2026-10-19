@@ -11,6 +11,7 @@ import '../../domain/entities/user_entity.dart';
 import '../../domain/usecases/login_usecase.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../domain/repositories/auth_repository.dart';
+import '../../../../core/network/session_manager.dart';
 
 /// Auth state
 class AuthState {
@@ -64,13 +65,25 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final SharedPreferences _prefs;
   final PushNotificationService _notificationService;
 
+  final SessionManager _sessionManager;
+
   AuthNotifier(
     this.loginUseCase,
     this.authRepository,
     this._prefs,
     this._notificationService,
+    this._sessionManager,
   ) : super(AuthState()) {
     checkAuthStatus();
+    _listenToSessionExpiry();
+  }
+
+  void _listenToSessionExpiry() {
+    _sessionManager.onSessionExpired.listen((_) {
+      if (state.isAuthenticated) {
+        logout();
+      }
+    });
   }
 
   /// Check if user is already logged in
@@ -213,11 +226,27 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(isLoading: true, error: null, lastRole: role, lastPhone: phoneNumber);
     try {
       // Check if phone number is registered in the system before sending OTP
-      final isInSystem = await authRepository.checkPhoneInSystem(phoneNumber, role);
-      if (!isInSystem) {
+      final result = await authRepository.checkPhoneInSystem(phoneNumber, role);
+      
+      bool? isInSystem;
+      String? errorMessage;
+      
+      result.fold(
+        (failure) {
+          errorMessage = failure.message;
+        },
+        (exists) {
+          isInSystem = exists;
+          if (!exists) {
+            errorMessage = 'This number is not registered in the system. Please contact your college transport office.';
+          }
+        },
+      );
+
+      if (errorMessage != null) {
         state = state.copyWith(
           isLoading: false,
-          error: 'This number is not registered in the system. Please contact your college transport office.',
+          error: errorMessage,
         );
         return;
       }
@@ -342,5 +371,6 @@ final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
     loginUseCase.repository, // AuthRepository
     getIt<SharedPreferences>(),
     notificationService,
+    getIt<SessionManager>(),
   );
 });

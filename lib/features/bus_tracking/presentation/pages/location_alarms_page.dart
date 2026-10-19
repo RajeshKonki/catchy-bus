@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../config/theme/app_theme.dart';
 import '../../../../core/utils/ui_helpers.dart';
 import '../providers/bus_tracking_provider.dart';
+import '../providers/alarm_provider.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../domain/entities/trip_direction.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
@@ -21,42 +23,6 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
   bool _showAutostartWarning = true;
 
 
-  String _calculateTriggerTime(String scheduledTime, int minutesBefore) {
-    try {
-      final cleanTime = scheduledTime.trim().toUpperCase();
-      final isPM = cleanTime.contains('PM');
-      final isAM = cleanTime.contains('AM');
-
-      final timeParts = cleanTime
-          .replaceAll('AM', '')
-          .replaceAll('PM', '')
-          .trim()
-          .split(':');
-      if (timeParts.length < 2) return '--:--';
-
-      int hour = int.parse(timeParts[0]);
-      int minute = int.parse(timeParts[1]);
-
-      if (isPM && hour != 12) hour += 12;
-      if (isAM && hour == 12) hour = 0;
-
-      final scheduledDateTime = DateTime(2024, 1, 1, hour, minute);
-      final triggerDateTime = scheduledDateTime.subtract(
-        Duration(minutes: minutesBefore),
-      );
-
-      final triggerHour =
-          triggerDateTime.hour > 12
-              ? triggerDateTime.hour - 12
-              : (triggerDateTime.hour == 0 ? 12 : triggerDateTime.hour);
-      final triggerMinute = triggerDateTime.minute.toString().padLeft(2, '0');
-      final period = triggerDateTime.hour >= 12 ? 'PM' : 'AM';
-
-      return '${triggerHour.toString().padLeft(2, '0')}:$triggerMinute $period';
-    } catch (e) {
-      return '--:--';
-    }
-  }
   // Mutable list for upcoming alarms
   late List<Map<String, dynamic>> _upcomingAlarms;
 
@@ -65,6 +31,9 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
     super.initState();
     _upcomingAlarms = [];
     _loadSyncAlarms();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(collegeStopsProvider.notifier).loadStops();
+    });
   }
 
   Future<void> _loadSyncAlarms() async {
@@ -75,13 +44,21 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
       final now = DateTime.now();
       setState(() {
         _upcomingAlarms = decoded.entries.map((e) {
+          // Support both old int format and new { mins, direction } format
+          final int mins = e.value is int
+              ? e.value as int
+              : (e.value is Map ? (e.value['mins'] as int? ?? 0) : 0);
+          final String direction = e.value is Map
+              ? (e.value['direction'] as String? ?? 'forward')
+              : 'forward';
           return {
             'id': e.key,
-            'busNumber': '--', // Generic if missing
+            'busNumber': '--',
             'busName': 'College Bus',
-            'minutesBefore': e.value,
+            'minutesBefore': mins,
+            'direction': direction,
             'station': e.key,
-            'stationCode': e.key.length >= 3 
+            'stationCode': e.key.length >= 3
                 ? e.key.substring(0, 3).toUpperCase()
                 : e.key.toUpperCase(),
             'date': _formatDate(now),
@@ -95,9 +72,16 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
     final prefs = await SharedPreferences.getInstance();
     final Map<String, dynamic> syncData = {};
     for (final a in _upcomingAlarms) {
-      syncData[a['station']] = a['minutesBefore'];
+      // Save in direction-aware format
+      syncData[a['station']] = {
+        'mins': a['minutesBefore'],
+        'direction': a['direction'] ?? 'forward',
+      };
     }
     await prefs.setString('stop_alarms', jsonEncode(syncData));
+    
+    // Sync with global alarm manager
+    ref.read(alarmManagerProvider.notifier).loadAlarms();
   }
 
   String _formatDate(DateTime date) {
@@ -254,27 +238,45 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                // Timing Info Helper
+                // Timing Info Helper (Live Dynamic Notification / ETA status)
                 if (_selectedStation != null)
                   Consumer(
                     builder: (context, ref, child) {
                       final stopsState = ref.watch(collegeStopsProvider);
+                      final busState = ref.watch(busTrackingProvider);
                       String? scheduledTime;
+                      
                       stopsState.maybeWhen(
                         loaded: (stops) {
-                          final stop = stops.firstWhere(
-                            (s) => s.name == _selectedStation,
-                          );
-                          scheduledTime = stop.scheduledTime;
+                          try {
+                            final stop = stops.firstWhere(
+                              (s) => s.name == _selectedStation,
+                            );
+                            scheduledTime = stop.scheduledTime;
+                          } catch (_) {}
                         },
                         orElse: () {},
                       );
 
                       if (scheduledTime == null) return const SizedBox.shrink();
 
-                      final triggerTime = _calculateTriggerTime(
-                        scheduledTime!,
-                        _minutesBefore.toInt(),
+                      // Get live estimated arrival minutes if trip is active
+                      int? liveEta;
+                      bool isTripActive = false;
+
+                      busState.maybeWhen(
+                        loaded: (route) {
+                          isTripActive = route.isTripActive;
+                          if (route.isTripActive) {
+                            try {
+                              final stop = route.stops.firstWhere(
+                                (s) => s.name == _selectedStation,
+                              );
+                              liveEta = stop.estimatedArrivalMinutes;
+                            } catch (_) {}
+                          }
+                        },
+                        orElse: () {},
                       );
 
                       return Container(
@@ -287,6 +289,7 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
                           ),
                         ),
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -308,27 +311,130 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 4),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'Alarm will trigger at:',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: Colors.grey,
+                            const SizedBox(height: 8),
+                            if (isTripActive && liveEta != null) ...[
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text(
+                                    'Live Estimated Arrival:',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.grey,
+                                    ),
                                   ),
-                                ),
-                                Text(
-                                  triggerTime,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.brightOrange,
+                                  Text(
+                                    '$liveEta mins away',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.deepBlue,
+                                    ),
                                   ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text(
+                                    'Alarm Threshold:',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Triggers when < ${_minutesBefore.toInt()} mins',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.brightOrange,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppColors.navigationBlue.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
-                              ],
-                            ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.satellite_alt_rounded,
+                                      size: 14,
+                                      color: AppColors.navigationBlue,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        liveEta! <= _minutesBefore.toInt()
+                                            ? '🚨 Bus is approaching! Alarm triggered.'
+                                            : '📡 Live tracking active: Alarm triggers in ${liveEta! - _minutesBefore.toInt()} mins.',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppColors.deepBlue,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ] else ...[
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text(
+                                    'Alarm Target:',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                  Text(
+                                    'When bus is ${_minutesBefore.toInt()} mins away',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.brightOrange,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[100],
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  children: const [
+                                    Icon(
+                                      Icons.info_outline,
+                                      size: 14,
+                                      color: Colors.grey,
+                                    ),
+                                    SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        'Bus is not active yet. Alarm will trigger dynamically using GPS once the trip starts.',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       );
@@ -351,11 +457,13 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
                           
                           String busNumber = user?.busNumber ?? '--';
                           String busName = user?.college ?? 'College Bus';
+                          String direction = 'forward'; // default
                           
                           busTrackingState.maybeWhen(
                             loaded: (busRoute) {
                               busNumber = busRoute.busNumber;
                               busName = busRoute.collegeName ?? busName;
+                              direction = busRoute.tripDirection.isReverse ? 'reverse' : 'forward';
                             },
                             orElse: () {},
                           );
@@ -367,6 +475,7 @@ class _LocationAlarmsPageState extends ConsumerState<LocationAlarmsPage> {
                             'busNumber': busNumber,
                             'busName': busName,
                             'minutesBefore': _minutesBefore.toInt(),
+                            'direction': direction,
                             'station': _selectedStation!,
                             'stationCode': _selectedStation!.length >= 3 
                               ? _selectedStation!.substring(0, 3).toUpperCase()

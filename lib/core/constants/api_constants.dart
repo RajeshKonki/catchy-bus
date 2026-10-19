@@ -1,14 +1,28 @@
+import 'dart:io';
 import '../config/env.dart';
 
 /// API related constants
 class ApiConstants {
   // Base URLs
-  static String get baseUrl =>
-      Env.baseUrl.endsWith('/') ? Env.baseUrl : '${Env.baseUrl}/';
+  static String get baseUrl {
+    String url = Env.baseUrl;
+    if (Platform.isAndroid) {
+      url = url.replaceAll('localhost', '10.0.2.2').replaceAll('127.0.0.1', '10.0.2.2');
+    }
+    return url.endsWith('/') ? url : '$url/';
+  }
+
   static String get socketUrl {
-    final uri = Uri.parse(Env.baseUrl);
-    // Strip the path (e.g. /api) — keep scheme + host + port only
-    return '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
+    String url = Env.baseUrl;
+    if (Platform.isAndroid) {
+      url = url.replaceAll('localhost', '10.0.2.2').replaceAll('127.0.0.1', '10.0.2.2');
+    }
+    final uri = Uri.parse(url);
+    int port = uri.port;
+    if (!uri.hasPort) {
+      port = uri.scheme == 'https' ? 443 : 80;
+    }
+    return '${uri.scheme}://${uri.host}:$port';
   }
   static const String apiVersion = '/v1';
 

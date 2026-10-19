@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../config/theme/app_theme.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../config/routes/app_router.dart';
@@ -19,17 +21,33 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   final _formKey = GlobalKey<FormState>();
   final _identifierController = TextEditingController();
   String _selectedRole = 'Student';
+  int _resendCooldown = 0;
+  Timer? _cooldownTimer;
 
   @override
   void dispose() {
     _identifierController.dispose();
+    _cooldownTimer?.cancel();
     super.dispose();
+  }
+
+  void _startCooldown() {
+    setState(() => _resendCooldown = 10);
+    _cooldownTimer?.cancel();
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_resendCooldown == 0) {
+        timer.cancel();
+      } else {
+        setState(() => _resendCooldown--);
+      }
+    });
   }
 
   void _handleContinue() {
     if (_formKey.currentState!.validate()) {
-      final phone = '+91${_identifierController.text.trim()}';
+      final phone = _identifierController.text.trim();
       ref.read(authProvider.notifier).sendOtp(phone, _selectedRole);
+      _startCooldown();
     }
   }
 
@@ -196,7 +214,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         width: double.infinity,
                         height: 52,
                         child: ElevatedButton(
-                          onPressed: authState.isLoading
+                          onPressed: authState.isLoading || _resendCooldown > 0
                               ? null
                               : _handleContinue,
                           style: ElevatedButton.styleFrom(
@@ -221,9 +239,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                     ),
                                   ),
                                 )
-                              : const Text(
-                                  'Send OTP',
-                                  style: TextStyle(
+                              : Text(
+                                  _resendCooldown > 0
+                                      ? 'Wait ${_resendCooldown}s'
+                                      : 'Send OTP',
+                                  style: const TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -258,6 +278,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         ),
                       ),
                       const SizedBox(height: 40),
+                      
+                      // Privacy Policy link
+                      TextButton(
+                        onPressed: () => _openPrivacyPolicy(),
+                        child: Text(
+                          'Privacy Policy',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[500],
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
                     ],
                   ),
                 ),
@@ -267,6 +301,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _openPrivacyPolicy() async {
+    const url = 'https://catchybustrack.netlify.app/privacy-policy';
+    final uri = Uri.parse(url);
+    try {
+      // Launching with platformDefault to let the OS decide best way to open
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.platformDefault,
+      );
+      
+      if (!launched && mounted) {
+        UIHelpers.showErrorTooltip(context, 'Could not open Privacy Policy');
+      }
+    } catch (e) {
+      debugPrint('Launch Error: $e');
+      if (mounted) {
+        UIHelpers.showErrorTooltip(context, 'Error opening Privacy Policy');
+      }
+    }
   }
 
   Widget _buildLogo() {
@@ -314,7 +369,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      role.$1,
+                      role.$1 == 'Student' ? 'Catchy User' : role.$1,
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,

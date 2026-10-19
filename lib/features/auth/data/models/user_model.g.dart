@@ -22,6 +22,7 @@ UserModel _$UserModelFromJson(Map json) => UserModel(
   collegeId: json['collegeId'] as String?,
   department: json['department'] as String?,
   year: json['year'] as String?,
+  status: json['status'] as String?,
   isMultiAccount: json['is_multi_account'] as bool?,
   accounts: (json['accounts'] as List<dynamic>?)
       ?.map((e) => UserModel.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -44,6 +45,7 @@ Map<String, dynamic> _$UserModelToJson(UserModel instance) => <String, dynamic>{
   'collegeId': instance.collegeId,
   'department': instance.department,
   'year': instance.year,
+  'status': instance.status,
   'is_multi_account': instance.isMultiAccount,
   'accounts': instance.accounts?.map((e) => e.toJson()).toList(),
 };

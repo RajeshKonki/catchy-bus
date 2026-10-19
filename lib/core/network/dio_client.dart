@@ -5,12 +5,15 @@ import '../constants/api_constants.dart';
 import '../constants/app_constants.dart';
 import '../di/injection.dart';
 
+import '../network/session_manager.dart';
+
 /// Dio client for making HTTP requests
 class DioClient {
   final Dio _dio;
+  final SessionManager _sessionManager;
   final Logger _logger = Logger();
 
-  DioClient(this._dio) {
+  DioClient(this._dio, this._sessionManager) {
     _dio
       ..options.baseUrl = ApiConstants.baseUrl
       ..options.connectTimeout = ApiConstants.connectTimeout
@@ -43,6 +46,13 @@ class DioClient {
           },
           onError: (error, handler) {
             _logger.e('DioError: ${error.message}');
+            
+            // Auto logout on 401 Unauthorized
+            if (error.response?.statusCode == 401) {
+              _logger.w('Session expired (401). Logging out...');
+              _sessionManager.logout();
+            }
+            
             return handler.next(error);
           },
         ),

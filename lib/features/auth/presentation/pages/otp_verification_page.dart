@@ -43,8 +43,29 @@ class _OtpVerificationPageState extends ConsumerState<OtpVerificationPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNodes[0].requestFocus();
     });
-    for (final node in _focusNodes) {
-      node.addListener(() => setState(() {}));
+    for (int i = 0; i < 6; i++) {
+      _focusNodes[i].addListener(() => setState(() {}));
+      _focusNodes[i].onKeyEvent = (node, event) {
+        if (event.runtimeType.toString().contains('Down') &&
+            event.logicalKey == LogicalKeyboardKey.backspace) {
+          if (_otpControllers[i].text.isEmpty) {
+            if (i > 0) {
+              _otpControllers[i - 1].clear();
+              _focusNodes[i - 1].requestFocus();
+              setState(() {});
+              return KeyEventResult.handled;
+            }
+          } else {
+            _otpControllers[i].clear();
+            if (i > 0) {
+              _focusNodes[i - 1].requestFocus();
+            }
+            setState(() {});
+            return KeyEventResult.handled;
+          }
+        }
+        return KeyEventResult.ignored;
+      };
     }
   }
 
@@ -365,7 +386,7 @@ class _OtpVerificationPageState extends ConsumerState<OtpVerificationPage> {
         focusNode: _focusNodes[index],
         textAlign: TextAlign.center,
         keyboardType: TextInputType.number,
-        maxLength: 1,
+        autofillHints: const [AutofillHints.oneTimeCode],
         style: TextStyle(
           fontSize: 24,
           fontWeight: FontWeight.w700,
@@ -382,6 +403,79 @@ class _OtpVerificationPageState extends ConsumerState<OtpVerificationPage> {
         ),
         inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         onChanged: (value) {
+          if (value.length > 1) {
+            // 1. Try to find a standalone 6-digit number sequence (e.g. from SMS template messages)
+            final allDigitSequences = RegExp(r'\d+').allMatches(value).map((m) => m.group(0)!).toList();
+            final exact6DigitOtp = allDigitSequences.firstWhere((s) => s.length == 6, orElse: () => '');
+            if (exact6DigitOtp.isNotEmpty) {
+              for (int i = 0; i < 6; i++) {
+                _otpControllers[i].text = exact6DigitOtp[i];
+              }
+              _focusNodes[5].unfocus();
+              if (_isOtpComplete) {
+                WidgetsBinding.instance.addPostFrameCallback(
+                  (_) => _handleVerify(),
+                );
+              }
+              setState(() {});
+              return;
+            }
+
+            // 2. Try clean digits length == 6 (e.g. "123-456" or "123 456")
+            final cleanOtp = value.replaceAll(RegExp(r'\D'), '');
+            if (cleanOtp.length == 6) {
+              for (int i = 0; i < 6; i++) {
+                _otpControllers[i].text = cleanOtp[i];
+              }
+              _focusNodes[5].unfocus();
+              if (_isOtpComplete) {
+                WidgetsBinding.instance.addPostFrameCallback(
+                  (_) => _handleVerify(),
+                );
+              }
+              setState(() {});
+              return;
+            }
+
+            // 3. Fallback: general paste from current index
+            if (cleanOtp.isNotEmpty && cleanOtp.length != 2) {
+              for (int i = 0; i < cleanOtp.length && (index + i) < 6; i++) {
+                _otpControllers[index + i].text = cleanOtp[i];
+              }
+              int nextFocusIndex = index + cleanOtp.length;
+              if (nextFocusIndex > 5) {
+                _focusNodes[5].unfocus();
+                if (_isOtpComplete) {
+                  WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => _handleVerify(),
+                  );
+                }
+              } else {
+                _focusNodes[nextFocusIndex].requestFocus();
+              }
+              setState(() {});
+              return;
+            }
+
+            // 4. Single character replacement (typing over existing character)
+            if (value.length == 2) {
+              final newChar = value.substring(1);
+              _otpControllers[index].text = newChar;
+              if (index < 5) {
+                _focusNodes[index + 1].requestFocus();
+              } else {
+                _focusNodes[index].unfocus();
+                if (_isOtpComplete) {
+                  WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => _handleVerify(),
+                  );
+                }
+              }
+              setState(() {});
+              return;
+            }
+          }
+
           if (value.isNotEmpty) {
             if (index < 5) {
               _focusNodes[index + 1].requestFocus();
@@ -399,7 +493,26 @@ class _OtpVerificationPageState extends ConsumerState<OtpVerificationPage> {
           setState(() {});
         },
         onTap: () {
-          _otpControllers[index].clear();
+          int firstEmptyIndex = -1;
+          for (int i = 0; i < 6; i++) {
+            if (_otpControllers[i].text.isEmpty) {
+              firstEmptyIndex = i;
+              break;
+            }
+          }
+
+          if (firstEmptyIndex != -1 && firstEmptyIndex < index) {
+            Future.microtask(() {
+              _focusNodes[firstEmptyIndex].requestFocus();
+            });
+          } else {
+            final val = _otpControllers[index].text;
+            if (val.isNotEmpty) {
+              _otpControllers[index].selection = TextSelection.fromPosition(
+                TextPosition(offset: val.length),
+              );
+            }
+          }
           setState(() {});
         },
       ),

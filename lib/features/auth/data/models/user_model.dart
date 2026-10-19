@@ -28,6 +28,7 @@ class UserModel {
   final String? collegeId;
   final String? department;
   final String? year;
+  final String? status;
   final bool? isMultiAccount;
   @JsonKey(name: 'accounts')
   final List<UserModel>? accounts;
@@ -48,6 +49,7 @@ class UserModel {
     this.collegeId,
     this.department,
     this.year,
+    this.status,
     this.isMultiAccount,
     this.accounts,
   });
@@ -69,6 +71,7 @@ class UserModel {
       collegeId: (json['collegeId'] ?? (json['college'] is Map ? json['college']['id'] : null)) as String?,
       department: json['department'] as String?,
       year: json['year'] as String?,
+      status: json['status'] as String?,
       isMultiAccount: json['isMultiAccount'] as bool?,
       accounts: (json['accounts'] as List?)
           ?.map((e) => UserModel.fromJson(e as Map<String, dynamic>))
@@ -93,6 +96,7 @@ class UserModel {
       'collegeId': collegeId,
       'department': department,
       'year': year,
+      'status': status,
       'isMultiAccount': isMultiAccount,
       'accounts': accounts?.map((e) => e.toJson()).toList(),
     };
@@ -115,6 +119,7 @@ class UserModel {
       collegeId: collegeId,
       department: department,
       year: year,
+      status: status,
       isMultiAccount: isMultiAccount,
       accounts: accounts?.map((e) => e.toEntity()).toList(),
     );
@@ -137,6 +142,7 @@ class UserModel {
       collegeId: entity.collegeId,
       department: entity.department,
       year: entity.year,
+      status: entity.status,
       isMultiAccount: entity.isMultiAccount,
       accounts: entity.accounts?.map((e) => UserModel.fromEntity(e)).toList(),
     );

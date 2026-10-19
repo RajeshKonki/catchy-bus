@@ -109,8 +109,19 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
         return response.data['exists'] == true;
       }
       return false;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        return false;
+      }
+      final message = e.response?.data is Map 
+        ? (e.response?.data['message'] ?? e.message)
+        : e.message;
+      throw ServerException(
+        message: message ?? 'Connection error', 
+        statusCode: e.response?.statusCode,
+      );
     } catch (e) {
-      return false;
+      throw ServerException(message: e.toString(), statusCode: null);
     }
   }
 

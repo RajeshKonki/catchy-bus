@@ -52,7 +52,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyBPrXV81gAV_CMemaM8PLXRgTSysLnfSkQ',
-    appId: '1:381561541061:android:795224735624f62c35bbac',
+    appId: '1:381561541061:android:25c6ca8e8dc3a59e35bbac',
     messagingSenderId: '381561541061',
     projectId: 'bus-tracking-app-715be',
     storageBucket: 'bus-tracking-app-715be.firebasestorage.app',
@@ -60,23 +60,23 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyBeMnnCB5cj91kB1uaZGQBUU1NXmuXBSXw',
-    appId: '1:381561541061:ios:26d83feb8d39b82235bbac',
+    appId: '1:381561541061:ios:918c26a6ebedbef935bbac',
     messagingSenderId: '381561541061',
     projectId: 'bus-tracking-app-715be',
     storageBucket: 'bus-tracking-app-715be.firebasestorage.app',
     authDomain: 'bus-tracking-app-715be.firebaseapp.com',
-    iosClientId: '381561541061-m63o8srnncd0flmgqot6o3u4c0b88dnm.apps.googleusercontent.com',
-    iosBundleId: 'mobile.catchybus.catchybus',
+    iosClientId: '381561541061-3rvlggfngufim4sehkbcnhcma0t0v077.apps.googleusercontent.com',
+    iosBundleId: 'com.bustrackingapplication.bustrackingflutter',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyBeMnnCB5cj91kB1uaZGQBUU1NXmuXBSXw',
-    appId: '1:381561541061:ios:26d83feb8d39b82235bbac',
+    appId: '1:381561541061:ios:918c26a6ebedbef935bbac',
     messagingSenderId: '381561541061',
     projectId: 'bus-tracking-app-715be',
     storageBucket: 'bus-tracking-app-715be.firebasestorage.app',
-    iosClientId: '381561541061-m63o8srnncd0flmgqot6o3u4c0b88dnm.apps.googleusercontent.com',
-    iosBundleId: 'mobile.catchybus.catchybus',
+    iosClientId: '381561541061-3rvlggfngufim4sehkbcnhcma0t0v077.apps.googleusercontent.com',
+    iosBundleId: 'com.bustrackingapplication.bustrackingflutter',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(

@@ -26,9 +26,13 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
         ApiConstants.busRoute(Uri.encodeComponent(busNumber)),
       );
       final prefs = await SharedPreferences.getInstance();
+      final String? lastSelectedRouteId = prefs.getString('last_selected_route_id');
+      final String? cleanRouteId = (routeId == 'null' || routeId == 'undefined' || routeId == '') ? null : routeId;
+      final String? cleanLastSelected = (lastSelectedRouteId == 'null' || lastSelectedRouteId == 'undefined' || lastSelectedRouteId == '') ? null : lastSelectedRouteId;
+
       return BusRouteModel.fromJson(
         response.data, 
-        preferredRouteId: routeId ?? prefs.getString('last_selected_route_id')
+        preferredRouteId: cleanRouteId ?? cleanLastSelected,
       );
     } catch (e) {
       rethrow;
@@ -167,6 +171,8 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
             isTripActive: data['isTripActive'] as bool?,
             isReverse: data['isReverse'] as bool?,
             students: students?.map((s) => Map<String, dynamic>.from(s)).toList(),
+            transitProgress: (location['transitProgress'] ?? location['transit_progress'])?.toDouble(),
+            transitFromStopIndex: location['transitFromStopIndex'] ?? location['transit_from_stop_index'],
           ),
         );
       }
@@ -191,10 +197,69 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
 
     print('DEBUG: [StudentSocket] streamTripStatus → listening for bus: $busNumber');
 
+    // Join room so status/skipped/attendance socket broadcasts are received
+    socketService.joinBus(busNumber);
+
     void onTripStatusUpdate(dynamic data) {
       print('DEBUG: [StudentSocket] trip_status_update: $data');
       if (data is Map && !controller.isClosed) {
         controller.add(Map<String, dynamic>.from(data));
+      }
+    }
+
+    void onTripStarted(dynamic data) {
+      print('DEBUG: [StudentSocket] trip_started: $data');
+      if (data is Map && !controller.isClosed) {
+        final hasReverse = data.containsKey('isReverse') || data.containsKey('is_reverse');
+        final isReverse = (data['isReverse'] ?? data['is_reverse']) == true;
+        controller.add({
+          'busId': busNumber,
+          'isTripActive': true,
+          if (hasReverse) 'isReverse': isReverse,
+          'status': 'STARTED',
+          'type': 'trip_started',
+        });
+      }
+    }
+
+    void onTripEnded(dynamic data) {
+      print('DEBUG: [StudentSocket] trip_ended: $data');
+      if (data is Map && !controller.isClosed) {
+        controller.add({
+          'busId': busNumber,
+          'isTripActive': false,
+          'status': 'COMPLETED',
+          'type': 'trip_ended',
+          'reason': data['reason'],
+        });
+      }
+    }
+
+    void onTripResumed(dynamic data) {
+      print('DEBUG: [StudentSocket] trip_resumed: $data');
+      if (data is Map && !controller.isClosed) {
+        final hasReverse = data.containsKey('isReverse') || data.containsKey('is_reverse');
+        final isReverse = (data['isReverse'] ?? data['is_reverse']) == true;
+        controller.add({
+          'busId': busNumber,
+          'isTripActive': true,
+          if (hasReverse) 'isReverse': isReverse,
+          'status': 'STARTED',
+          'type': 'trip_resumed',
+        });
+      }
+    }
+
+    void onTripCancelled(dynamic data) {
+      print('DEBUG: [StudentSocket] trip_cancelled: $data');
+      if (data is Map && !controller.isClosed) {
+        controller.add({
+          'busId': busNumber,
+          'isTripActive': false,
+          'status': 'CANCELLED',
+          'type': 'trip_cancelled',
+          'reason': data['reason'],
+        });
       }
     }
 
@@ -222,6 +287,7 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
           'busId': busNumber,
           'type': 'stop_skipped',
           'stopName': data['stopName'],
+          'reason': data['reason'],
         });
       }
     }
@@ -241,6 +307,10 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
     }
 
     socketService.on('trip_status_update', onTripStatusUpdate);
+    socketService.on('trip_started', onTripStarted);
+    socketService.on('trip_ended', onTripEnded);
+    socketService.on('trip_resumed', onTripResumed);
+    socketService.on('trip_cancelled', onTripCancelled);
     socketService.on('bus_location_update', onLocationUpdateForTripActive);
     socketService.on('stop_skipped', onStopSkipped);
     socketService.on('attendance_marked', onAttendanceMarked);
@@ -248,11 +318,14 @@ class BusTrackingSocketDataSourceImpl implements BusTrackingRemoteDataSource {
     controller.onCancel = () {
       print('DEBUG: [StudentSocket] streamTripStatus cancelled – removing its listeners');
       socketService.offCallback('trip_status_update', onTripStatusUpdate);
+      socketService.offCallback('trip_started', onTripStarted);
+      socketService.offCallback('trip_ended', onTripEnded);
+      socketService.offCallback('trip_resumed', onTripResumed);
+      socketService.offCallback('trip_cancelled', onTripCancelled);
       socketService.offCallback('bus_location_update', onLocationUpdateForTripActive);
       socketService.offCallback('stop_skipped', onStopSkipped);
       socketService.offCallback('attendance_marked', onAttendanceMarked);
     };
-
 
     return controller.stream;
   }

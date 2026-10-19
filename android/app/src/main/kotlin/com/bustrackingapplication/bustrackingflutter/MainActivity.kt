@@ -1,4 +1,4 @@
-package mobile.catchybus.catchybus
+package com.bustrackingapplication.bustrackingflutter
 
 import io.flutter.embedding.android.FlutterActivity
 

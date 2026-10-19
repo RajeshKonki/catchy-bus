@@ -203,11 +203,14 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
-  Future<bool> checkPhoneInSystem(String phone, String role) async {
+  Future<Either<Failure, bool>> checkPhoneInSystem(String phone, String role) async {
     try {
-      return await remoteDataSource.checkPhoneInSystem(phone, role);
+      final exists = await remoteDataSource.checkPhoneInSystem(phone, role);
+      return Right(exists);
+    } on ServerException catch (e) {
+      return Left(ServerFailure(message: e.message, statusCode: e.statusCode));
     } catch (e) {
-      return false;
+      return Left(UnknownFailure(message: e.toString()));
     }
   }
 }

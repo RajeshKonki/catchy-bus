@@ -1,11 +1,15 @@
 import 'package:dartz/dartz.dart';
 import '../../../../core/error/failures.dart';
 import '../entities/bus_route.dart';
+import '../entities/trip_direction.dart';
 
 /// Repository interface for bus tracking operations
 abstract class BusTrackingRepository {
   /// Get the current bus route information
-  Future<Either<Failure, BusRoute>> getBusRoute(String busNumber, {String? routeId});
+  Future<Either<Failure, BusRoute>> getBusRoute(
+    String busNumber, {
+    String? routeId,
+  });
 
   /// Get list of available buses
   Future<Either<Failure, List<BusSummary>>> getAvailableBuses();
@@ -21,13 +25,22 @@ abstract class BusTrackingRepository {
   });
 
   /// Get students for a specific stop on a bus
-  Future<Either<Failure, List<Map<String, dynamic>>>> getStudentsForStop(String busNumber, String stopName);
+  Future<Either<Failure, List<Map<String, dynamic>>>> getStudentsForStop(
+    String busNumber,
+    String stopName,
+  );
 
   /// Get all students assigned to a bus
-  Future<Either<Failure, List<Map<String, dynamic>>>> getAllStudentsForBus(String busNumber);
+  Future<Either<Failure, List<Map<String, dynamic>>>> getAllStudentsForBus(
+    String busNumber,
+  );
 
   /// Update bus location (for real-time tracking)
-  Stream<Either<Failure, BusRoute>> trackBusLocation(String busNumber, {bool? initialIsReverse, String? routeId});
+  Stream<Either<Failure, BusRoute>> trackBusLocation(
+    String busNumber, {
+    TripDirection? initialDirection,
+    String? routeId,
+  });
 
   /// Stream real-time trip status updates (start/end/cancel/stop_skipped)
   Stream<Map<String, dynamic>> streamTripStatus(String busNumber);

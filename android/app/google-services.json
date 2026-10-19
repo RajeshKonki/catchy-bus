@@ -58,6 +58,30 @@
       },
       "oauth_client": [
         {
+          "client_id": "381561541061-1re3g6lojeu5bqfjmn86v6jde41ju2it.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.bustrackingapplication.bustrackingflutter",
+            "certificate_hash": "bfdc5540c8addaaf0230bacaf0b2ff1849362ed7"
+          }
+        },
+        {
+          "client_id": "381561541061-6te6bd015crc60gkn6181paaohksma4b.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.bustrackingapplication.bustrackingflutter",
+            "certificate_hash": "60d3d0fe0ac73ba6a6bd276b93772f2454fc498b"
+          }
+        },
+        {
+          "client_id": "381561541061-alnpqaj5u9rcaj9emeqri03t9t9das5d.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.bustrackingapplication.bustrackingflutter",
+            "certificate_hash": "72775a6c787980ebb38f43fca4b326287f866c6d"
+          }
+        },
+        {
           "client_id": "381561541061-dn76ahqfjmn1lnuf35ltj7cvfj4otgb5.apps.googleusercontent.com",
           "client_type": 3
         }

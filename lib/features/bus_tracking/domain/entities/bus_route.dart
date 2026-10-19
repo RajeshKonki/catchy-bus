@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'trip_direction.dart';
 
 /// Entity representing a bus route with tracking information
 class BusRoute extends Equatable {
@@ -19,14 +20,17 @@ class BusRoute extends Equatable {
   final BusPosition busPosition;
   final List<RouteStop> stops;
   final List<RoutePoint> routePath;
+  final List<RoutePoint>? reverseRoutePath;
   final String? routeName;
   final bool isTripActive;
-  final bool isReverse;
+  final TripDirection tripDirection;
   final List<Map<String, dynamic>> students;
   /// 0.0 = at fromStop, 1.0 = at nextStop. -1 = at a stop (not in transit)
   final double transitProgress;
   /// Index of the stop the bus just left. -1 if not in transit.
   final int transitFromStopIndex;
+  final String? tripStatus;
+  final String? cancelReason;
 
   const BusRoute({
     required this.id,
@@ -46,13 +50,18 @@ class BusRoute extends Equatable {
     required this.busPosition,
     required this.stops,
     required this.routePath,
+    this.reverseRoutePath,
     this.routeName,
     this.isTripActive = false,
-    this.isReverse = false,
+    this.tripDirection = TripDirection.forward,
     this.students = const [],
     this.transitProgress = -1.0,
     this.transitFromStopIndex = -1,
+    this.tripStatus,
+    this.cancelReason,
   });
+
+  bool get isReverse => tripDirection.isReverse;
 
   @override
   List<Object?> get props => [
@@ -73,12 +82,15 @@ class BusRoute extends Equatable {
     busPosition,
     stops,
     routePath,
+    reverseRoutePath,
     routeName,
     isTripActive,
-    isReverse,
+    tripDirection,
     students,
     transitProgress,
     transitFromStopIndex,
+    tripStatus,
+    cancelReason,
   ];
 
   BusRoute copyWith({
@@ -99,13 +111,20 @@ class BusRoute extends Equatable {
     BusPosition? busPosition,
     List<RouteStop>? stops,
     List<RoutePoint>? routePath,
+    List<RoutePoint>? reverseRoutePath,
     String? routeName,
     bool? isTripActive,
-    bool? isReverse,
+    TripDirection? tripDirection,
+    bool? isReverse, // Helper for backwards compatibility
     List<Map<String, dynamic>>? students,
     double? transitProgress,
     int? transitFromStopIndex,
+    String? tripStatus,
+    String? cancelReason,
   }) {
+    final newDirection = tripDirection ?? 
+                         (isReverse != null ? (isReverse ? TripDirection.reverse : TripDirection.forward) : this.tripDirection);
+    
     return BusRoute(
       id: id ?? this.id,
       busNumber: busNumber ?? this.busNumber,
@@ -124,12 +143,15 @@ class BusRoute extends Equatable {
       busPosition: busPosition ?? this.busPosition,
       stops: stops ?? this.stops,
       routePath: routePath ?? this.routePath,
+      reverseRoutePath: reverseRoutePath ?? this.reverseRoutePath,
       routeName: routeName ?? this.routeName,
       isTripActive: isTripActive ?? this.isTripActive,
-      isReverse: isReverse ?? this.isReverse,
+      tripDirection: newDirection,
       students: students ?? this.students,
       transitProgress: transitProgress ?? this.transitProgress,
       transitFromStopIndex: transitFromStopIndex ?? this.transitFromStopIndex,
+      tripStatus: tripStatus ?? this.tripStatus,
+      cancelReason: cancelReason ?? this.cancelReason,
     );
   }
 }
@@ -144,9 +166,11 @@ class BusPosition extends Equatable {
   final bool? isOnTime;
   final int? delayMinutes;
   final bool? isTripActive;
-  final bool? isReverse;
+  final TripDirection? tripDirection;
   final List<Map<String, dynamic>>? students;
-  
+  final double? transitProgress;
+  final int? transitFromStopIndex;
+
   const BusPosition({
     required this.latitude,
     required this.longitude,
@@ -156,9 +180,13 @@ class BusPosition extends Equatable {
     this.isOnTime,
     this.delayMinutes,
     this.isTripActive,
-    this.isReverse,
+    this.tripDirection,
     this.students,
+    this.transitProgress,
+    this.transitFromStopIndex,
   });
+
+  bool get isReverse => tripDirection?.isReverse ?? false;
 
   @override
   List<Object?> get props => [
@@ -170,8 +198,10 @@ class BusPosition extends Equatable {
     isOnTime,
     delayMinutes,
     isTripActive,
-    isReverse,
+    tripDirection,
     students,
+    transitProgress,
+    transitFromStopIndex,
   ];
 
   BusPosition copyWith({
@@ -182,8 +212,16 @@ class BusPosition extends Equatable {
     String? nextStop,
     bool? isOnTime,
     int? delayMinutes,
+    bool? isTripActive,
+    TripDirection? tripDirection,
+    bool? isReverse, // Helper
     List<Map<String, dynamic>>? students,
+    double? transitProgress,
+    int? transitFromStopIndex,
   }) {
+    final newDirection = tripDirection ?? 
+                         (isReverse != null ? (isReverse ? TripDirection.reverse : TripDirection.forward) : this.tripDirection);
+
     return BusPosition(
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
@@ -192,7 +230,11 @@ class BusPosition extends Equatable {
       nextStop: nextStop ?? this.nextStop,
       isOnTime: isOnTime ?? this.isOnTime,
       delayMinutes: delayMinutes ?? this.delayMinutes,
+      isTripActive: isTripActive ?? this.isTripActive,
+      tripDirection: newDirection,
       students: students ?? this.students,
+      transitProgress: transitProgress ?? this.transitProgress,
+      transitFromStopIndex: transitFromStopIndex ?? this.transitFromStopIndex,
     );
   }
 }
@@ -202,6 +244,8 @@ class RouteStop extends Equatable {
   final String name;
   final double latitude;
   final double longitude;
+  final double? reverseLatitude;
+  final double? reverseLongitude;
   final StopType type;
   final int? estimatedArrivalMinutes;
   final int? studentCount;
@@ -209,12 +253,17 @@ class RouteStop extends Equatable {
   final DateTime? actualDepartureTime;
   final int? boardedStudentCount;
   final String? scheduledTime; // Planned time, e.g., "08:30 AM"
+  final int? logicalStopId;
+  final int? forwardStopId;
+  final int? reverseStopId;
 
 
   const RouteStop({
     required this.name,
     required this.latitude,
     required this.longitude,
+    this.reverseLatitude,
+    this.reverseLongitude,
     required this.type,
     this.estimatedArrivalMinutes,
     this.studentCount,
@@ -222,6 +271,9 @@ class RouteStop extends Equatable {
     this.actualDepartureTime,
     this.boardedStudentCount,
     this.scheduledTime,
+    this.logicalStopId,
+    this.forwardStopId,
+    this.reverseStopId,
   });
 
   @override
@@ -229,6 +281,8 @@ class RouteStop extends Equatable {
     name,
     latitude,
     longitude,
+    reverseLatitude,
+    reverseLongitude,
     type,
     estimatedArrivalMinutes,
     studentCount,
@@ -236,12 +290,17 @@ class RouteStop extends Equatable {
     actualDepartureTime,
     boardedStudentCount,
     scheduledTime,
+    logicalStopId,
+    forwardStopId,
+    reverseStopId,
   ];
 
   RouteStop copyWith({
     String? name,
     double? latitude,
     double? longitude,
+    double? reverseLatitude,
+    double? reverseLongitude,
     StopType? type,
     int? estimatedArrivalMinutes,
     int? studentCount,
@@ -249,11 +308,16 @@ class RouteStop extends Equatable {
     DateTime? actualDepartureTime,
     int? boardedStudentCount,
     String? scheduledTime,
+    int? logicalStopId,
+    int? forwardStopId,
+    int? reverseStopId,
   }) {
     return RouteStop(
       name: name ?? this.name,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      reverseLatitude: reverseLatitude ?? this.reverseLatitude,
+      reverseLongitude: reverseLongitude ?? this.reverseLongitude,
       type: type ?? this.type,
       estimatedArrivalMinutes: estimatedArrivalMinutes ?? this.estimatedArrivalMinutes,
       studentCount: studentCount ?? this.studentCount,
@@ -261,6 +325,9 @@ class RouteStop extends Equatable {
       actualDepartureTime: actualDepartureTime ?? this.actualDepartureTime,
       boardedStudentCount: boardedStudentCount ?? this.boardedStudentCount,
       scheduledTime: scheduledTime ?? this.scheduledTime,
+      logicalStopId: logicalStopId ?? this.logicalStopId,
+      forwardStopId: forwardStopId ?? this.forwardStopId,
+      reverseStopId: reverseStopId ?? this.reverseStopId,
     );
   }
 

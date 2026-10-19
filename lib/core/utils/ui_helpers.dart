@@ -5,10 +5,16 @@ class UIHelpers {
   /// Formats distance from KM into a user-friendly string (KM or Meters)
   static String formatDistance(double? km) {
     if (km == null) return '...';
-    if (km < 1.0) {
-      return '${(km * 1000).toInt()} m';
+    final int totalMeters = (km * 1000).round();
+    if (totalMeters < 1000) {
+      return '$totalMeters m';
     } else {
-      return '${km.toStringAsFixed(1)} km';
+      final int wholeKm = totalMeters ~/ 1000;
+      final int remainingMeters = totalMeters % 1000;
+      if (remainingMeters == 0) {
+        return '$wholeKm km';
+      }
+      return '$wholeKm km $remainingMeters m';
     }
   }
 
@@ -147,5 +153,100 @@ class UIHelpers {
     clean = clean.replaceAll('Exception:', '').trim();
     if (clean.isEmpty) return 'An unexpected error occurred.';
     return clean;
+  }
+
+  /// Shows a prominent disclosure dialog for location permissions
+  /// Required by Google Play for background location usage.
+  static Future<bool> showLocationDisclosure(
+    BuildContext context, {
+    required String title,
+    required String message,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.location_on, color: AppColors.deepBlue, size: 28),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  color: AppColors.deepBlue,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: const TextStyle(
+                color: Colors.black87,
+                fontSize: 14,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue.shade800, size: 20),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'You can change this anytime in your device settings.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'No Thanks',
+              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.deepBlue,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+            child: const Text(
+              'Allow',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 }

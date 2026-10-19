@@ -7,6 +7,7 @@ import '../../core/utils/logger.dart';
 class SocketService {
   io.Socket? _socket;
   final String _baseUrl = ApiConstants.socketUrl;
+  String? _token;
 
   /// Tracks which bus rooms this socket has joined, so we can rejoin on reconnect.
   final Set<String> _joinedRooms = {};
@@ -14,15 +15,28 @@ class SocketService {
   io.Socket? get socket => _socket;
 
   void connect({String? token}) {
-    if (_socket?.connected == true) return;
+    final bool tokenChanged = token != null && token != _token;
+    if (token != null) {
+      _token = token;
+    }
+
+    if (_socket?.connected == true && !tokenChanged) return;
+
+    if (_socket != null && !tokenChanged) {
+      _socket?.connect();
+      return;
+    }
+
+    // If token changed or socket is null, clean up old socket and instantiate new one
+    _socket?.disconnect();
 
     _socket = io.io(_baseUrl, <String, dynamic>{
-      'transports': ['websocket'],
+      'transports': ['websocket', 'polling'],
       'autoConnect': true,
       'reconnection': true,
       'reconnectionAttempts': 10,
       'reconnectionDelay': 2000,
-      'auth': token != null ? {'token': token} : null,
+      'auth': _token != null ? {'token': _token} : null,
     });
 
     _socket?.onConnect((_) {
@@ -53,12 +67,24 @@ class SocketService {
     _joinedRooms.clear();
     _socket?.disconnect();
     _socket = null;
+    _token = null;
   }
 
   void emit(String event, dynamic data) {
     if (_socket == null || !(_socket!.connected)) {
-      // Not connected yet — connect and defer the emit until connected.
+      // Connect if needed
       connect();
+      
+      // PRODUCTION FIX: Do NOT queue high-frequency telemetry when offline.
+      // Queuing location updates causes a massive memory leak and "event storm" 
+      // when the network reconnects, causing the bus icon to jitter wildly with stale data.
+      // The GPS stream fires continuously anyway, so the next fresh location will
+      // automatically be sent once the socket is back online.
+      if (event == 'update_location') {
+        return; // Drop stale offline telemetry
+      }
+
+      // For critical one-time events (like start_trip), queue them once
       _socket?.once('connect', (_) => _socket?.emit(event, data));
       return;
     }
@@ -106,6 +132,8 @@ class SocketService {
     required double latitude,
     required double longitude,
     double? bearing,
+    int? transitFromStopIndex,
+    double? transitProgress,
   }) {
     emit('update_location', {
       'busId': busId,
@@ -113,6 +141,8 @@ class SocketService {
         'latitude': latitude,
         'longitude': longitude,
         'bearing': bearing,
+        if (transitFromStopIndex != null) 'transitFromStopIndex': transitFromStopIndex,
+        if (transitProgress != null) 'transitProgress': transitProgress,
       },
     });
   }
@@ -145,6 +175,7 @@ class SocketService {
     double? driverLat,
     double? driverLng,
     bool isReverse = false,
+    bool isResuming = false,
   }) {
     emit('start_trip', {
       'busNumber': busNumber,
@@ -152,6 +183,7 @@ class SocketService {
       if (driverLat != null) 'driverLat': driverLat,
       if (driverLng != null) 'driverLng': driverLng,
       'isReverse': isReverse,
+      'isResuming': isResuming,
     });
   }
 

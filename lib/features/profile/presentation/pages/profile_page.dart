@@ -225,7 +225,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                           ? 'Bus ${user.busNumber}'
                           : 'Not Assigned',
                     ),
-                    if (user.department != null && user.department!.isNotEmpty) ...[
+                    if (user.department != null &&
+                        user.department!.isNotEmpty) ...[
                       Divider(height: 1, color: Colors.grey.shade200),
                       _buildDetailItem(
                         icon: Icons.business,
@@ -276,12 +277,12 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                 ),
                 child: Column(
                   children: [
-                    _buildSettingItem(
-                      icon: Icons.notifications,
-                      label: 'Notification Settings',
-                      iconColor: AppColors.deepBlue,
-                      onTap: () => context.push(AppRouter.notificationSettings),
-                    ),
+                    // _buildSettingItem(
+                    //   icon: Icons.notifications,
+                    //   label: 'Notification Settings',
+                    //   iconColor: AppColors.deepBlue,
+                    //   onTap: () => context.push(AppRouter.notificationSettings),
+                    // ),
                     Divider(height: 1, color: Colors.grey.shade200),
                     _buildSettingItem(
                       icon: Icons.help,

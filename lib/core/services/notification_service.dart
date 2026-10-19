@@ -1,22 +1,93 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/di/injection.dart';
 import '../../features/auth/domain/repositories/auth_repository.dart';
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Background message handler — MUST be a top-level function (not a class method)
-// This fires when a data-only FCM message arrives while the app is terminated/backgrounded.
+// Unified Message Handler
+// Processes both foreground and background/terminated FCM messages.
 // ──────────────────────────────────────────────────────────────────────────────
+Future<void> handleIncomingNotification(RemoteMessage message) async {
+  final title = message.notification?.title ?? message.data['title'] ?? 'CatchyBus';
+  final body = message.notification?.body ?? message.data['body'] ?? '';
+
+  if (body.isEmpty) return;
+
+  final type = message.data['type'];
+  final stopName = message.data['stopName'];
+
+  // Check if this is a proximity or approaching alert for the student's stop
+  final bool isAlarmType = stopName != null &&
+      (type == 'PROXIMITY_1KM' || type == 'APPROACHING' || type == 'STOP_REACHED');
+
+  if (isAlarmType) {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? alarmsJson = prefs.getString('stop_alarms');
+      bool isMatch = false;
+
+      if (alarmsJson != null) {
+        final Map<String, dynamic> decoded = jsonDecode(alarmsJson);
+        final Map<String, int> activeAlarms = decoded.map((key, value) => MapEntry(key, value as int));
+
+        // Normalize names for robust match
+        final stopNameNormalized = stopName.toString().trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+        for (var key in activeAlarms.keys) {
+          final keyNormalized = key.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+          if (keyNormalized == stopNameNormalized) {
+            isMatch = true;
+            break;
+          }
+        }
+      }
+
+      if (isMatch) {
+        // Show alarm notification on the dedicated high-priority alarm channel
+        await _LocalNotificationHelper.showAlarmCustom(
+          title: title,
+          body: body,
+          stopName: stopName,
+        );
+
+        // Play the system alarm sound (looping, asAlarm overrides silent settings)
+        try {
+          FlutterRingtonePlayer().playAlarm(
+            looping: true,
+            asAlarm: true,
+          );
+          // Silence the alarm after 5 seconds to prevent indefinite looping
+          Future.delayed(const Duration(seconds: 5), () {
+            FlutterRingtonePlayer().stop();
+          });
+        } catch (e) {
+          print('[Background Alarm] Failed to trigger ringtone: $e');
+        }
+        return;
+      } else {
+        // Proximity alert for a stop the student has NOT subscribed to — do not show/sound.
+        return;
+      }
+    } catch (e) {
+      print('[Background Alarm] Failed to process alarm check: $e');
+    }
+  }
+
+  // Show a standard local notification for other message types
+  await _LocalNotificationHelper.show(
+    title: title,
+    body: body,
+  );
+}
+
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // Show a local notification for background/terminated data messages
-  await _LocalNotificationHelper.show(
-    title: message.notification?.title ?? message.data['title'] ?? 'CatchyBus',
-    body: message.notification?.body ?? message.data['body'] ?? '',
-  );
+  await handleIncomingNotification(message);
 }
 
 // Internal helper — static so it can be used both in the service and the bg handler
@@ -173,6 +244,53 @@ class _LocalNotificationHelper {
       payload: 'alarm:$stopName',
     );
   }
+
+  /// Shows a high-priority custom alarm notification with server-provided text
+  static Future<void> showAlarmCustom({
+    required String title,
+    required String body,
+    required String stopName,
+  }) async {
+    await init();
+
+    final androidDetails = AndroidNotificationDetails(
+      _alarmChannelId,
+      'CatchyBus Alarms',
+      channelDescription: 'Alerts when your bus is approaching your stop',
+      importance: Importance.max,
+      priority: Priority.max,
+      icon: '@mipmap/ic_launcher',
+      playSound: true,
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 500, 200, 500, 200, 1000, 200, 1000]),
+      category: AndroidNotificationCategory.alarm,
+      audioAttributesUsage: AudioAttributesUsage.alarm,
+      fullScreenIntent: true,
+      visibility: NotificationVisibility.public,
+      ticker: '🚌 Bus Alert',
+    );
+
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      interruptionLevel: InterruptionLevel.timeSensitive,
+      sound: 'default',
+    );
+
+    final id = stopName.hashCode.abs() % 100000;
+
+    await _plugin.show(
+      id: id,
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      ),
+      payload: 'alarm:$stopName',
+    );
+  }
 }
 
 class PushNotificationService {
@@ -210,14 +328,7 @@ class PushNotificationService {
     // ── Foreground messages ───────────────────────────────────────────────────
     // By default FCM does NOT show a heads-up notification when the app is
     // in the foreground. We show one ourselves via flutter_local_notifications.
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      final title =
-          message.notification?.title ?? message.data['title'] ?? 'CatchyBus';
-      final body = message.notification?.body ?? message.data['body'] ?? '';
-      if (body.isNotEmpty) {
-        _LocalNotificationHelper.show(title: title, body: body);
-      }
-    });
+    FirebaseMessaging.onMessage.listen(handleIncomingNotification);
 
     // ── App opened from a notification (background → foreground) ─────────────
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
@@ -292,6 +403,20 @@ Future<void> showAlarmNotification({
     stopName: stopName,
     etaMinutes: etaMinutes,
   );
+  
+  // Play the system alarm sound (looping, asAlarm overrides device silent/DND settings)
+  try {
+    FlutterRingtonePlayer().playAlarm(
+      looping: true,
+      asAlarm: true,
+    );
+    // Stop the alarm sound after 5 seconds so it does not ring indefinitely
+    Future.delayed(const Duration(seconds: 5), () {
+      FlutterRingtonePlayer().stop();
+    });
+  } catch (e) {
+    print('[Alarm] Failed to play ringtone: $e');
+  }
 }
 
 /// Shows an attendance notification when a student boards the bus.
@@ -306,6 +431,18 @@ Future<void> showAttendanceNotification({
   );
 }
 
+/// Shows a notification when the bus trip is started.
+Future<void> showTripStartedNotification({
+  required String busNumber,
+  required bool isReverse,
+}) async {
+  final tripType = isReverse ? 'Return' : 'Morning';
+  await _LocalNotificationHelper.show(
+    title: '🚀 Trip Started',
+    body: 'The $tripType trip for Bus $busNumber has just started. You can now track it live!',
+  );
+}
+
 /// Shows a notification when the bus trip is completed.
 Future<void> showTripCompletedNotification({
   required String busNumber,
@@ -315,6 +452,43 @@ Future<void> showTripCompletedNotification({
   await _LocalNotificationHelper.show(
     title: '🏁 Trip Completed',
     body: 'The $tripType trip for Bus $busNumber has finished. Thank you for using CatchyBus!',
+  );
+}
+
+/// Shows a notification when the bus trip is cancelled.
+Future<void> showTripCancelledNotification({
+  required String busNumber,
+  required String reason,
+}) async {
+  await _LocalNotificationHelper.show(
+    title: '🛑 Trip Cancelled',
+    body: 'The trip for Bus $busNumber has been cancelled. Reason: $reason',
+  );
+}/// Shows a notification when a pickup stop is skipped.
+Future<void> showStopSkippedNotification({
+  required String busNumber,
+  required String stopName,
+  String? reason,
+}) async {
+  await _LocalNotificationHelper.show(
+    title: '⚠️ Stop Skipped',
+    body: 'Bus $busNumber has skipped the $stopName stop.${reason != null && reason.isNotEmpty ? " Reason: $reason" : ""}',
+  );
+}
+
+/// Shows a warning notification when the bus deviates significantly from its planned route.
+Future<void> showRouteDeviationNotification({
+  required String busNumber,
+  required double deviationMeters,
+}) async {
+  final int deviationKm = (deviationMeters / 1000).round();
+  final String distText = deviationMeters >= 1000
+      ? '~${deviationKm}km'
+      : '~${deviationMeters.round()}m';
+  await _LocalNotificationHelper.show(
+    title: '🚨 Bus Off Route!',
+    body: 'Bus $busNumber has deviated $distText from the planned route. It may have taken an alternate path.',
+    payload: 'route_deviation:$busNumber',
   );
 }
 

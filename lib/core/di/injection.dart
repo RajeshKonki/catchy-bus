@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../network/dio_client.dart';
+import '../network/session_manager.dart';
 import '../network/network_info.dart';
 import '../services/maps_service.dart';
 import '../../features/auth/data/datasources/auth_remote_datasource.dart';
@@ -25,7 +26,8 @@ Future<void> initializeDependencies() async {
   getIt.registerLazySingleton(() => Dio());
 
   // Core
-  getIt.registerLazySingleton(() => DioClient(getIt<Dio>()));
+  getIt.registerLazySingleton(() => SessionManager());
+  getIt.registerLazySingleton(() => DioClient(getIt<Dio>(), getIt<SessionManager>()));
   getIt.registerLazySingleton<NetworkInfo>(() => NetworkInfoImpl(getIt<Connectivity>()));
 
   getIt.registerLazySingleton(() => SocketService());

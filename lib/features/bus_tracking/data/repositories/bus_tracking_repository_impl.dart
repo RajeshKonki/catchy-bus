@@ -4,6 +4,7 @@ import '../../../../core/error/failures.dart';
 import '../../domain/entities/bus_route.dart';
 import '../../domain/repositories/bus_tracking_repository.dart';
 import '../datasources/bus_tracking_remote_data_source.dart';
+import '../../domain/entities/trip_direction.dart';
 
 class BusTrackingRepositoryImpl implements BusTrackingRepository {
   final BusTrackingRemoteDataSource remoteDataSource;
@@ -62,15 +63,7 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
   Future<Either<Failure, BusRoute>> getBusRoute(String busNumber, {String? routeId}) async {
     try {
       final result = await remoteDataSource.getBusRoute(busNumber, routeId: routeId);
-      BusRoute route = result.toEntity();
-      
-      // If the bus is already in a reverse trip, reverse the manifest immediately
-      if (route.isReverse) {
-        route = route.copyWith(
-          stops: route.stops.reversed.toList(),
-          routePath: route.routePath.reversed.toList(),
-        );
-      }
+      final BusRoute route = result.toEntity();
       return Right(route);
     } catch (e) {
       return Left(ServerFailure(message: e.toString()));
@@ -138,7 +131,7 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
   @override
   Stream<Either<Failure, BusRoute>> trackBusLocation(
     String busNumber, {
-    bool? initialIsReverse,
+    TripDirection? initialDirection,
     String? routeId,
   }) async* {
     final routeResult = await getBusRoute(busNumber, routeId: routeId);
@@ -156,15 +149,29 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
 
     // If direction is explicitly provided (e.g. from driver/student selection), 
     // override the REST result and ensure the physical stops/path are flipped if necessary.
-    if (initialIsReverse != null) {
-      if (currentRoute.isReverse != initialIsReverse) {
+    // BUT only override if the trip is NOT active (if the trip is active, we MUST trust the active trip's direction).
+    if (initialDirection != null && !currentRoute.isTripActive) {
+      if (currentRoute.tripDirection != initialDirection) {
+        final reversedStops = currentRoute.stops.reversed.toList();
+        final adjustedStops = reversedStops.asMap().entries.map((entry) {
+          final idx = entry.key;
+          final stop = entry.value;
+          if (idx == 0) {
+            return stop.copyWith(type: StopType.passedStop);
+          } else if (idx == reversedStops.length - 1) {
+            return stop.copyWith(type: StopType.futureStop);
+          } else {
+            return stop.type == StopType.skippedStop ? stop : stop.copyWith(type: StopType.futureStop);
+          }
+        }).toList();
+
         currentRoute = currentRoute.copyWith(
-          isReverse: initialIsReverse,
-          stops: currentRoute.stops.reversed.toList(),
+          tripDirection: initialDirection,
+          stops: adjustedStops,
           routePath: currentRoute.routePath.reversed.toList(),
         );
       } else {
-        currentRoute = currentRoute.copyWith(isReverse: initialIsReverse);
+        currentRoute = currentRoute.copyWith(tripDirection: initialDirection);
       }
     }
 
@@ -172,7 +179,33 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
 
     yield* remoteDataSource.streamBusLocation(busNumber).map((position) {
       final posEntity = position.toEntity();
-      final bool isReverse = posEntity.isReverse ?? currentRoute.isReverse;
+      // If the server indicates a trip is active, prioritize the server/driver's direction.
+      // Otherwise, fallback to initialDirection/intended direction lock.
+      final TripDirection currentDirection = (posEntity.isTripActive == true && posEntity.tripDirection != null)
+          ? posEntity.tripDirection!
+          : (initialDirection ?? (posEntity.tripDirection ?? currentRoute.tripDirection));
+
+      // If the direction changed mid-stream, flip stops and path of currentRoute
+      if (currentDirection != currentRoute.tripDirection) {
+        final reversedStops = currentRoute.stops.reversed.toList();
+        final adjustedStops = reversedStops.asMap().entries.map((entry) {
+          final idx = entry.key;
+          final stop = entry.value;
+          if (idx == 0) {
+            return stop.copyWith(type: StopType.passedStop);
+          } else if (idx == reversedStops.length - 1) {
+            return stop.copyWith(type: StopType.futureStop);
+          } else {
+            return stop.type == StopType.skippedStop ? stop : stop.copyWith(type: StopType.futureStop);
+          }
+        }).toList();
+
+        currentRoute = currentRoute.copyWith(
+          tripDirection: currentDirection,
+          stops: adjustedStops,
+          routePath: currentRoute.routePath.reversed.toList(),
+        );
+      }
 
       final stops = currentRoute.stops;
       if (stops.isEmpty) return Right<Failure, BusRoute>(currentRoute);
@@ -181,12 +214,48 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
       String newCurrentLocation = currentRoute.currentLocation;
       String newNextStop = currentRoute.nextStop;
 
-      // If trip is NOT active, all stops should be reset to Upcoming
-      if (posEntity.isTripActive == false) {
+      // ── STRATEGY 0: Authority fields from driver (index + progress) ──────────
+      // When the driver emits transitFromStopIndex and transitProgress, the student
+      // app must use them verbatim — bypassing all name-matching / GPS heuristics.
+      // This is the single source of truth for stop sequence and bus position.
+      final int? authIdx = posEntity.transitFromStopIndex;
+      final double? authProg = posEntity.transitProgress;
+      // Accept authIdx >= -1 so that we can represent "in transit to the very first stop"
+      if (authIdx != null && authProg != null && authIdx >= -1) {
+        final int fromIdx = authIdx.clamp(-1, stops.length - 2);
+        updatedStops = stops.asMap().entries.map((e) {
+          final i = e.key; final stop = e.value;
+          if (stop.type == StopType.skippedStop) return stop;
+          if (i <= fromIdx) return stop.copyWith(type: StopType.passedStop);
+          if (i == fromIdx + 1) return stop.copyWith(type: StopType.nextStop);
+          return stop.copyWith(type: StopType.futureStop);
+        }).toList();
+        final nextStopName = stops[(fromIdx + 1).clamp(0, stops.length - 1)].name;
+        newCurrentLocation = 'In Transit (to $nextStopName)';
+        newNextStop = nextStopName;
+        final withEtas0 = _applyEtas(currentRoute.copyWith(busPosition: posEntity), updatedStops);
+        currentRoute = currentRoute.copyWith(
+          busPosition: posEntity,
+          currentLocation: newCurrentLocation,
+          nextStop: newNextStop,
+          isOnTime: posEntity.isOnTime ?? currentRoute.isOnTime,
+          arrivalTimeMinutes: posEntity.delayMinutes ?? currentRoute.arrivalTimeMinutes,
+          stops: withEtas0,
+          isTripActive: posEntity.isTripActive ?? currentRoute.isTripActive,
+          tripDirection: currentDirection,
+          students: posEntity.students ?? currentRoute.students,
+          transitFromStopIndex: fromIdx,
+          transitProgress: authProg,
+        );
+        return Right<Failure, BusRoute>(currentRoute);
+      }
+
+      // If trip is definitively NOT active, all stops should be reset to Upcoming
+      if (posEntity.isTripActive == false && !currentRoute.isTripActive) {
         currentRoute = currentRoute.copyWith(
           busPosition: posEntity,
           isTripActive: false,
-          isReverse: posEntity.isReverse ?? currentRoute.isReverse,
+          tripDirection: currentDirection,
           stops: stops.map((s) => s.copyWith(type: StopType.futureStop)).toList(),
           currentLocation: 'Inactive',
           nextStop: 'Trip not started',
@@ -222,6 +291,7 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
             newCurrentLocation = serverCurrent;
             updatedStops = stops.asMap().entries.map((e) {
               final i = e.key; final stop = e.value;
+              if (stop.type == StopType.passedStop || stop.type == StopType.skippedStop) return stop;
               // Since the list is already in travel order, lower index = passed
               if (i < atIdx) return stop.copyWith(type: StopType.passedStop);
               if (i == atIdx) return stop.copyWith(type: StopType.currentLocation);
@@ -235,6 +305,7 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
             newNextStop = serverNextStop;
             updatedStops = stops.asMap().entries.map((e) {
               final i = e.key; final stop = e.value;
+              if (stop.type == StopType.passedStop || stop.type == StopType.skippedStop) return stop;
               if (i < nextIdx) return stop.copyWith(type: StopType.passedStop);
               if (i == nextIdx) return stop.copyWith(type: StopType.nextStop);
               return stop.copyWith(type: StopType.futureStop);
@@ -251,7 +322,7 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
             arrivalTimeMinutes: posEntity.delayMinutes ?? currentRoute.arrivalTimeMinutes,
             stops: withEtas,
             isTripActive: posEntity.isTripActive ?? currentRoute.isTripActive,
-            isReverse: isReverse,
+            tripDirection: currentDirection,
             students: posEntity.students ?? currentRoute.students,
           );
           return Right<Failure, BusRoute>(currentRoute);
@@ -259,17 +330,18 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
 
         if (nextIdx == 0) {
           // Heading to first stop — nothing passed yet
-          updatedStops = stops.asMap().entries.map((e) =>
-            e.key == 0 ? e.value.copyWith(type: StopType.nextStop)
-                       : e.value.copyWith(type: StopType.futureStop)
-          ).toList();
+          updatedStops = stops.asMap().entries.map((e) {
+            if (e.value.type == StopType.passedStop || e.value.type == StopType.skippedStop) return e.value;
+            return e.key == 0 ? e.value.copyWith(type: StopType.nextStop)
+                              : e.value.copyWith(type: StopType.futureStop);
+          }).toList();
           final withEtas = _applyEtas(currentRoute.copyWith(busPosition: posEntity), updatedStops);
           currentRoute = currentRoute.copyWith(
             busPosition: posEntity, 
             nextStop: serverNextStop, 
             stops: withEtas,
             isTripActive: posEntity.isTripActive ?? currentRoute.isTripActive,
-            isReverse: posEntity.isReverse ?? currentRoute.isReverse,
+            tripDirection: currentDirection,
           );
           return Right<Failure, BusRoute>(currentRoute);
         }
@@ -286,6 +358,7 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
         );
         updatedStops = stops.asMap().entries.map((e) {
           final i = e.key; final stop = e.value;
+          if (stop.type == StopType.passedStop || stop.type == StopType.skippedStop) return stop;
           // Travel order: lower index = passed
           if (i < atIdx) return stop.copyWith(type: StopType.passedStop);
           if (i == atIdx) return stop.copyWith(type: StopType.currentLocation);
@@ -300,7 +373,7 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
           isOnTime: posEntity.isOnTime ?? currentRoute.isOnTime,
           arrivalTimeMinutes: posEntity.delayMinutes ?? currentRoute.arrivalTimeMinutes,
           isTripActive: posEntity.isTripActive ?? currentRoute.isTripActive,
-          isReverse: posEntity.isReverse ?? currentRoute.isReverse,
+          tripDirection: currentDirection,
           stops: withEtas2,
           students: posEntity.students ?? currentRoute.students,
         );
@@ -317,10 +390,11 @@ class BusTrackingRepositoryImpl implements BusTrackingRepository {
         ) / 1000;
         if (dist < minDist) { minDist = dist; closestIdx = i; }
       }
-      if (closestIdx >= 0 && minDist < 1.0) {
+      if (closestIdx >= 0 && minDist < 0.05) {
         updatedStops = stops.asMap().entries.map((e) {
           final i = e.key;
           final stop = e.value;
+          if (stop.type == StopType.passedStop || stop.type == StopType.skippedStop) return stop;
           // Travel order: lower index = passed
           if (i < closestIdx) return stop.copyWith(type: StopType.passedStop);
           if (i == closestIdx) return stop.copyWith(type: StopType.currentLocation);

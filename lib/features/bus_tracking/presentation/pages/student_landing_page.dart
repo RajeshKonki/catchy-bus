@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:url_launcher/url_launcher.dart';
 import 'package:catchybus/features/auth/presentation/providers/auth_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,12 +9,15 @@ import 'package:shimmer/shimmer.dart';
 import 'package:catchybus/features/auth/domain/entities/user_entity.dart';
 import '../providers/banner_provider.dart';
 import '../providers/bus_tracking_provider.dart';
+import '../../domain/entities/bus_route.dart';
+import '../../domain/usecases/get_bus_route.dart';
 import '../../../../config/theme/app_theme.dart';
 import '../../../../config/routes/app_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/network/dio_client.dart';
 import '../../../../core/constants/api_constants.dart';
 import '../../../../core/di/injection.dart';
+import '../../../../core/utils/ui_helpers.dart';
 
 class StudentLandingPage extends ConsumerStatefulWidget {
   const StudentLandingPage({super.key});
@@ -31,6 +35,10 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
 
   List<String> _bannerUrls = [];
 
+  final Map<String, BusRoute> _studentBusRoutes = {};
+  final Map<String, bool> _studentBusLoading = {};
+  final Map<String, String?> _studentBusErrors = {};
+
   @override
   void initState() {
     super.initState();
@@ -39,11 +47,55 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
     });
   }
 
-  void _loadBusDetails() {
+  Future<void> _loadBusDetails() async {
     final user = ref.read(authProvider).user;
     _lastLoadedUserId = user?.id;
-    final busNumber = user?.busNumber ?? 'Bus No. 10';
-    ref.read(busTrackingProvider.notifier).loadBusRoute(busNumber);
+
+    final List<UserEntity> students =
+        (user?.accounts != null && user!.accounts!.isNotEmpty)
+        ? user.accounts!
+        : (user != null ? [user] : []);
+
+    if (students.isEmpty) return;
+
+    final uniqueBuses = students
+        .map((s) => s.busNumber)
+        .where((b) => b != null && b.isNotEmpty)
+        .cast<String>()
+        .toSet();
+
+    final getBusRoute = ref.read(getBusRouteUseCaseProvider);
+
+    for (final busNumber in uniqueBuses) {
+      if (mounted) {
+        setState(() {
+          _studentBusLoading[busNumber] = true;
+          _studentBusErrors[busNumber] = null;
+        });
+      }
+
+      final result = await getBusRoute(GetBusRouteParams(busNumber: busNumber));
+      
+      if (!mounted) return;
+
+      result.fold(
+        (failure) {
+          setState(() {
+            _studentBusErrors[busNumber] = failure.message;
+            _studentBusLoading[busNumber] = false;
+          });
+        },
+        (busRoute) {
+          setState(() {
+            _studentBusRoutes[busNumber] = busRoute;
+            _studentBusLoading[busNumber] = false;
+          });
+        },
+      );
+    }
+
+    final mainBusNumber = user?.busNumber ?? 'Bus No. 10';
+    ref.read(busTrackingProvider.notifier).loadBusRoute(mainBusNumber);
   }
 
   void _startTimer(int bannerCount) {
@@ -64,29 +116,60 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
     });
   }
 
-  Future<void> _selectRouteAndTrack(BuildContext context, String busNumber, String studentName) async {
+  Future<void> _selectRouteAndTrack(
+    BuildContext context,
+    String busNumber,
+    String studentName,
+  ) async {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator(color: AppColors.primaryYellow)),
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: AppColors.primaryYellow),
+      ),
     );
 
     try {
       final dioClient = getIt<DioClient>();
-      final response = await dioClient.get(ApiConstants.busRoute(Uri.encodeComponent(busNumber)));
-      
+      final response = await dioClient.get(
+        ApiConstants.busRoute(Uri.encodeComponent(busNumber)),
+      );
+
       if (!mounted) return;
       Navigator.pop(context); // close loading
 
       final data = response.data;
-      
+
       // If trip is ACTIVE, just push right away since the route is decided by active trip anyway
       final trips = (data['trips'] as List?) ?? [];
       final activeTrips = trips.where((t) => t['status'] == 'STARTED').toList();
       final bool isTripActive = activeTrips.isNotEmpty;
-      
+
+      if (isTripActive) {
+        final trip = activeTrips[0];
+        final bool isReverse =
+            trip['isReverse'] == true || trip['is_reverse'] == true;
+        String? routeId = trip['routeId']?.toString();
+        if (routeId == 'null' || routeId == 'undefined' || routeId == '') {
+          routeId = null;
+        }
+        if (!mounted) return;
+        context.push(
+          AppRouter.busTracking,
+          extra: {
+            'busNumber': busNumber,
+            'studentName': studentName,
+            'isReverse': isReverse,
+            'routeId': routeId,
+          },
+        );
+        return;
+      }
+
       final busRoutesRaw = data['busRoutes'] as List? ?? [];
-      final validRoutes = busRoutesRaw.where((br) => br is Map && br['route'] is Map).toList();
+      final validRoutes = busRoutesRaw
+          .where((br) => br is Map && br['route'] is Map)
+          .toList();
 
       if (validRoutes.isEmpty) {
         if (!mounted) return;
@@ -101,209 +184,38 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
         return;
       }
 
-      // Generate Forward and Return options for every valid route
-      final List<Map<String, dynamic>> routeOptions = [];
-      for (var item in validRoutes) {
-        final routeObj = item['route'] as Map;
-        final routeId = item['routeId']?.toString();
-        final routeName = routeObj['name']?.toString() ?? 'Unnamed Route';
-        final start = routeObj['startPoint']?.toString() ?? 'Start';
-        final end = routeObj['endPoint']?.toString() ?? 'End';
-
-        // Forward Option
-        routeOptions.add({
-          'routeId': routeId,
-          'title': '$routeName (Forward)',
-          'subtitle': '$start ➔ $end',
-          'isReverse': false,
-        });
-
-        // Return Option
-        routeOptions.add({
-          'routeId': routeId,
-          'title': '$routeName (Return)',
-          'subtitle': '$end ➔ $start',
-          'isReverse': true,
-        });
+      // Pick the first route option and determine the direction based on time of day
+      final firstRouteItem = validRoutes.first;
+      String? routeId = firstRouteItem['routeId']?.toString();
+      if (routeId == 'null' || routeId == 'undefined' || routeId == '') {
+        routeId = null;
       }
 
-      // Show bottom sheet with ALL available routes (Forward/Reverse)
+      // If trip is not started by driver, always default to the forward trip route (isReverse = false)
+      const bool defaultIsReverse = false;
+
+      if (routeId != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('last_selected_route_id', routeId);
+      }
+
       if (!mounted) return;
-      showModalBottomSheet(
-        context: context,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        builder: (sheetContext) {
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.all(20.0),
-                  child: Text(
-                    'Select Route to Track',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.darkCharcoal,
-                    ),
-                  ),
-                ),
-                Flexible(
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    itemCount: routeOptions.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
-                    itemBuilder: (context, index) {
-                      final option = routeOptions[index];
-                      final routeId = option['routeId'];
-                      final isReverse = option['isReverse'] as bool;
-                      
-                      return ListTile(
-                        onTap: () async {
-                          Navigator.pop(sheetContext); // Close sheet
-                          if (routeId != null) {
-                             final prefs = await SharedPreferences.getInstance();
-                             await prefs.setString('last_selected_route_id', routeId);
-                          }                     
-                          if (mounted) {
-                            context.push(
-                              AppRouter.busTracking,
-                              extra: {
-                                'busNumber': busNumber,
-                                'studentName': studentName,
-                                'isReverse': isReverse,
-                                'routeId': routeId,
-                              },
-                            );
-                          }
-                        },
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: Colors.grey.shade200),
-                        ),
-                        leading: Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: AppColors.lightOrange,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            isReverse ? Icons.keyboard_return : Icons.route, 
-                            color: AppColors.brightOrange
-                          ),
-                        ),
-                        title: Text(option['title'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: Text(option['subtitle'], style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 20),
-              ],
-            ),
-          );
+      context.push(
+        AppRouter.busTracking,
+        extra: {
+          'busNumber': busNumber,
+          'studentName': studentName,
+          'isReverse': defaultIsReverse,
+          'routeId': routeId,
         },
       );
-
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context); // close loading
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load bus routes: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load bus routes: $e')));
     }
-  }
-
-  void _showTripSelectionSheet(BuildContext context, String busNumber, String studentName, List<dynamic> activeTrips) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(20.0),
-                child: Text(
-                  'Multiple Trips Active',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.darkCharcoal,
-                  ),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20),
-                child: Text(
-                  'Please select which trip direction you would like to track.',
-                  style: TextStyle(fontSize: 14, color: Colors.grey),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  itemCount: activeTrips.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    final trip = activeTrips[index];
-                    final isReverse = trip['isReverse'] == true || trip['is_reverse'] == true;
-                    final routeName = trip['routeName'] ?? (isReverse ? 'Return Trip' : 'Morning Trip');
-                    
-                    return ListTile(
-                      onTap: () {
-                        Navigator.pop(sheetContext); // Close sheet
-                        context.push(
-                          AppRouter.busTracking,
-                          extra: {
-                            'busNumber': busNumber,
-                            'studentName': studentName,
-                            'isReverse': isReverse,
-                          },
-                        );
-                      },
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(color: Colors.grey.shade200),
-                      ),
-                      leading: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: isReverse ? AppColors.brightOrange.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          isReverse ? Icons.home : Icons.school,
-                          color: isReverse ? AppColors.brightOrange : Colors.blue,
-                        ),
-                      ),
-                      title: Text(routeName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text(
-                        isReverse ? 'Heading towards Residential Areas' : 'Heading towards College',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 20),
-            ],
-          ),
-        );
-      },
-    );
   }
 
   @override
@@ -311,6 +223,20 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
     _timer?.cancel();
     _pageController.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleRefresh() async {
+    // 1. Refresh user profile
+    await ref.read(authProvider.notifier).refreshProfile();
+
+    // 2. Refresh banners
+    await ref.read(bannerProvider.notifier).getBanners();
+
+    // 3. Refresh bus route details
+    await _loadBusDetails();
+
+    // Trigger local UI refresh if needed
+    if (mounted) setState(() {});
   }
 
   @override
@@ -332,42 +258,50 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: Stack(
-          children: [
-            // Background Ad overlay at the bottom
-            Positioned(
-              bottom: 20,
-              left: 20,
-              right: 20,
-              child: _buildBackgroundAd(),
-            ),
-            // Foreground Content
-            Column(
-              children: [
-                Container(
-                  color: Colors.white, // Ensure top bar has background
-                  child: _buildTopBar(),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    child: Column(
-                      children: [
-                        const SizedBox(height: 16),
-                        _buildBannerCarousel(),
-                        const SizedBox(height: 16),
-                        _buildStudentCards(),
-                        // const SizedBox(height: 16),
-                        // _buildQRSection(),
-                        // Add extra padding at bottom so user can scroll content past the background ad
-                        const SizedBox(height: 140),
-                      ],
+        child: RefreshIndicator(
+          onRefresh: _handleRefresh,
+          color: AppColors.brightOrange,
+          backgroundColor: Colors.white,
+          displacement: 40,
+          child: Stack(
+            children: [
+              // Background Ad overlay at the bottom
+              Positioned(
+                bottom: 20,
+                left: 20,
+                right: 20,
+                child: _buildBackgroundAd(),
+              ),
+              // Foreground Content
+              Column(
+                children: [
+                  Container(
+                    color: Colors.white, // Ensure top bar has background
+                    child: _buildTopBar(),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(
+                        parent: BouncingScrollPhysics(),
+                      ),
+                      child: Column(
+                        children: [
+                          const SizedBox(height: 16),
+                          _buildBannerCarousel(),
+                          const SizedBox(height: 16),
+                          _buildStudentCards(),
+                          // const SizedBox(height: 16),
+                          // _buildQRSection(),
+                          // Add extra padding at bottom so user can scroll content past the background ad
+                          const SizedBox(height: 140),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -450,49 +384,12 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
   }
 
   Widget _buildBusSelector() {
-    final user = ref.watch(authProvider).user;
-    final busNumber = user?.busNumber ?? 'Select Bus';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: AppColors.primaryYellow,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: const Icon(
-              Icons.directions_bus_filled_rounded,
-              size: 16,
-              color: AppColors.deepBlue,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              busNumber,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: AppColors.darkCharcoal,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(width: 4),
-          const Icon(
-            Icons.keyboard_arrow_down_rounded,
-            size: 18,
-            color: AppColors.darkCharcoal,
-          ),
-        ],
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Image.asset(
+        'assets/icons/catchy_logo.png',
+        height: 32,
+        fit: BoxFit.contain,
       ),
     );
   }
@@ -553,6 +450,20 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
                         borderSide: const BorderSide(
                           color: AppColors.deepBlue,
                           width: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: TextButton(
+                      onPressed: () => _openPrivacyPolicy(),
+                      child: const Text(
+                        'View Privacy Policy',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.deepBlue,
+                          decoration: TextDecoration.underline,
                         ),
                       ),
                     ),
@@ -667,6 +578,19 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
         child: Icon(icon, color: iconColor ?? AppColors.deepBlue, size: 20),
       ),
     );
+  }
+
+  Future<void> _openPrivacyPolicy() async {
+    const url = 'https://catchybustrack.netlify.app/privacy-policy';
+    final uri = Uri.parse(url);
+    try {
+      final launched = await launchUrl(uri, mode: LaunchMode.platformDefault);
+      if (!launched) {
+        debugPrint('Could not launch $url');
+      }
+    } catch (e) {
+      debugPrint('Error opening privacy policy: $e');
+    }
   }
 
   Widget _buildBannerCarousel() {
@@ -789,7 +713,6 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
   }
 
   Widget _buildStudentCards() {
-    final busState = ref.watch(busTrackingProvider);
     final user = ref.watch(authProvider).user;
 
     // Using accounts list if available, otherwise just the single user
@@ -802,68 +725,100 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
       return const SizedBox.shrink();
     }
 
-    return busState.when(
-      initial: () => _buildBusDetailsShimmer(),
-      loading: () => _buildBusDetailsShimmer(),
-      error: (message) => _buildErrorCard(message),
-      loaded: (busRoute) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Column(
-            children: students.map((student) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12.0),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey.shade300, width: 1),
-                  ),
-                  child: Column(
+    final uniqueBuses = students
+        .map((s) => s.busNumber)
+        .where((b) => b != null && b.isNotEmpty)
+        .cast<String>()
+        .toSet();
+
+    final bool anyLoading = uniqueBuses.any((b) => _studentBusLoading[b] == true);
+    if (anyLoading && _studentBusRoutes.isEmpty) {
+      return _buildBusDetailsShimmer();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      child: Column(
+        children: students.map((student) {
+          final bool isInactive = (student.status ?? '').toUpperCase() == 'INACTIVE';
+          final String? busNumber = student.busNumber;
+          final bool hasBus = busNumber != null && busNumber.isNotEmpty;
+          
+          final BusRoute? busRoute = hasBus ? _studentBusRoutes[busNumber] : null;
+          final bool isLoading = hasBus && (_studentBusLoading[busNumber] == true);
+          final String? errorMsg = hasBus ? _studentBusErrors[busNumber] : null;
+
+          final bool studentIsBoarded = () {
+            if (busRoute == null || !busRoute.isTripActive) return false;
+            for (final s in busRoute.students) {
+              final sName = (s['name'] as String? ?? '')
+                  .toLowerCase()
+                  .trim();
+              final uName = (student.name as String? ?? '')
+                  .toLowerCase()
+                  .trim();
+              if (sName == uName) {
+                return (s['isBoarded'] ?? false) == true;
+              }
+            }
+            return false;
+          }();
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12.0),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.grey.shade300, width: 1),
+              ),
+              child: Column(
+                children: [
+                  // Top section: User Details
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Top section: User Details
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Avatar setup
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: student.avatar != null
-                                ? Image.network(
-                                    student.avatar!,
-                                    width: 50,
-                                    height: 50,
-                                    fit: BoxFit.cover,
-                                    errorBuilder:
-                                        (context, error, stackTrace) =>
-                                            Container(
-                                              width: 50,
-                                              height: 50,
-                                              color: Colors.grey.shade200,
-                                              child: const Icon(
-                                                Icons.person,
-                                                size: 30,
-                                                color: Colors.grey,
-                                              ),
-                                            ),
-                                  )
-                                : Container(
-                                    width: 50,
-                                    height: 50,
-                                    color: Colors.grey.shade200,
-                                    child: const Icon(
-                                      Icons.person,
-                                      size: 30,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                          ),
-                          const SizedBox(width: 14),
-                          // Names and Details
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                      // Avatar setup
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: student.avatar != null
+                            ? Image.network(
+                                student.avatar!,
+                                width: 50,
+                                height: 50,
+                                fit: BoxFit.cover,
+                                errorBuilder:
+                                    (context, error, stackTrace) =>
+                                        Container(
+                                          width: 50,
+                                          height: 50,
+                                          color: Colors.grey.shade200,
+                                          child: const Icon(
+                                            Icons.person,
+                                            size: 30,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                              )
+                            : Container(
+                                width: 50,
+                                height: 50,
+                                color: Colors.grey.shade200,
+                                child: const Icon(
+                                  Icons.person,
+                                  size: 30,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                      ),
+                      const SizedBox(width: 14),
+                      // Names and Details
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
                               children: [
                                 Text(
                                   student.name,
@@ -873,178 +828,451 @@ class _StudentLandingPageState extends ConsumerState<StudentLandingPage> {
                                     color: AppColors.darkCharcoal,
                                   ),
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  student.studentId != null &&
-                                          student.studentId!.isNotEmpty
-                                      ? 'ID: ${student.studentId}'
-                                      : (student.id.isNotEmpty
-                                            ? 'ID: ${student.id}'
-                                            : 'ID: Not Available'),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  student.college ?? 'College info unavailable',
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    color: AppColors.darkCharcoal,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          // QR Code Icon
-                          InkWell(
-                            onTap: () {
-                              context.push(AppRouter.studentQr, extra: student);
-                            },
-                            borderRadius: BorderRadius.circular(8),
-                            child: Padding(
-                              padding: const EdgeInsets.all(4.0),
-                              child: Icon(
-                                Icons.qr_code_2,
-                                size: 36,
-                                color: Colors.grey.shade500,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Divider(
-                        height: 1,
-                        thickness: 1,
-                        color: Colors.grey.shade200,
-                      ),
-                      const SizedBox(height: 12),
-                      // Bottom Section: Bus Info & Action Button
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                student.busNumber ?? busRoute.busNumber,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        busRoute.isOnTime
-                                            ? Icons.check_circle
-                                            : Icons.error,
-                                        size: 14,
-                                        color: busRoute.isOnTime
-                                            ? const Color(0xFF4CAF50)
-                                            : Colors.red,
+                                if (isInactive) ...[
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(
+                                        color: Colors.red.withOpacity(0.5),
                                       ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        busRoute.isOnTime
-                                            ? 'On Time'
-                                            : 'Delayed',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                          color: busRoute.isOnTime
-                                              ? const Color(0xFF4CAF50)
-                                              : Colors.red,
-                                        ),
+                                    ),
+                                    child: const Text(
+                                      'Inactive',
+                                      style: TextStyle(
+                                        color: Colors.red,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
                                       ),
-                                      if (busRoute.isTripActive && busRoute.isReverse) ...[
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: AppColors.brightOrange.withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(4),
-                                          ),
-                                          child: const Text(
-                                            'RETURN TRIP',
-                                            style: TextStyle(
-                                              color: AppColors.brightOrange,
-                                              fontSize: 9,
-                                              fontWeight: FontWeight.w900,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ],
+                                    ),
                                   ),
-                                  if (busRoute.isTripActive)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Text(
-                                        'Next: ${busRoute.nextStop}',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey.shade700,
-                                          fontWeight: FontWeight.w500,
+                                ] else if (studentIsBoarded) ...[
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.green.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(
+                                        4,
+                                      ),
+                                      border: Border.all(
+                                        color: Colors.green.withOpacity(
+                                          0.5,
                                         ),
                                       ),
                                     ),
+                                    child: const Text(
+                                      'Onboarded',
+                                      style: TextStyle(
+                                        color: Colors.green,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
                                 ],
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                            height: 40,
-                            child: ElevatedButton(
-                              onPressed: () => _selectRouteAndTrack(
-                                context,
-                                student.busNumber ?? busRoute.busNumber,
-                                student.name,
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.brightOrange,
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 0,
-                                ),
-                              ),
-                              child: const Text(
-                                'Track Bus',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              student.studentId != null &&
+                                      student.studentId!.isNotEmpty
+                                  ? 'ID: ${student.studentId}'
+                                  : (student.id.isNotEmpty
+                                        ? 'ID: ${student.id}'
+                                        : 'ID: Not Available'),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
+                            const SizedBox(height: 4),
+                            Text(
+                              student.college ?? 'College info unavailable',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: AppColors.darkCharcoal,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // QR Code Icon
+                      InkWell(
+                        onTap: () {
+                          context.push(AppRouter.studentQr, extra: student);
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4.0),
+                          child: Icon(
+                            Icons.qr_code_2,
+                            size: 36,
+                            color: Colors.grey.shade500,
                           ),
-                        ],
+                        ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 12),
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: Colors.grey.shade200,
+                  ),
+                  const SizedBox(height: 12),
+                  // Bottom Section: Bus Info & Action Button
+                  _buildBottomBusSection(
+                    student: student,
+                    isInactive: isInactive,
+                    hasBus: hasBus,
+                    busNumber: busNumber,
+                    busRoute: busRoute,
+                    isLoading: isLoading,
+                    errorMsg: errorMsg,
+                    studentIsBoarded: studentIsBoarded,
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildBottomBusSection({
+    required UserEntity student,
+    required bool isInactive,
+    required bool hasBus,
+    required String? busNumber,
+    required BusRoute? busRoute,
+    required bool isLoading,
+    required String? errorMsg,
+    required bool studentIsBoarded,
+  }) {
+    if (isInactive) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                busNumber ?? 'No Bus Assigned',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
                 ),
-              );
-            }).toList(),
+              ),
+              const SizedBox(height: 4),
+              const Row(
+                children: [
+                  Icon(Icons.cancel_outlined, size: 14, color: Colors.red),
+                  SizedBox(width: 4),
+                  Text(
+                    'Inactive',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        );
-      },
+          _buildTrackButton(
+            disabled: true,
+            tooltip: 'Inactive student account. Please contact your college admin.',
+          ),
+        ],
+      );
+    }
+
+    if (!hasBus) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'No Bus Assigned',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
+              ),
+              SizedBox(height: 4),
+              Row(
+                children: [
+                  Icon(Icons.info_outline, size: 14, color: Colors.grey),
+                  SizedBox(width: 4),
+                  Text(
+                    'Not Available',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          _buildTrackButton(
+            disabled: true,
+            tooltip: 'No bus assigned to this student.',
+          ),
+        ],
+      );
+    }
+
+    if (isLoading) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                busNumber!,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const SizedBox(
+                height: 14,
+                width: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.brightOrange,
+                ),
+              ),
+            ],
+          ),
+          _buildTrackButton(disabled: true),
+        ],
+      );
+    }
+
+    if (errorMsg != null || busRoute == null) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                busNumber!,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Icon(Icons.error_outline, size: 14, color: Colors.red),
+                  const SizedBox(width: 4),
+                  Text(
+                    errorMsg ?? 'Failed to load details',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ],
+          ),
+          _buildTrackButton(
+            disabled: false,
+            onPressed: () => _loadBusDetails(),
+            label: 'Retry',
+          ),
+        ],
+      );
+    }
+
+    // Loaded state
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              busRoute.busNumber,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.black,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      studentIsBoarded
+                          ? Icons.check_circle
+                          : (!busRoute.isTripActive
+                                ? (busRoute.tripStatus == 'COMPLETED'
+                                      ? Icons.check_circle
+                                      : Icons.info_outline)
+                                : (busRoute.isOnTime
+                                      ? Icons.check_circle
+                                      : Icons.error)),
+                      size: 14,
+                      color: studentIsBoarded
+                          ? const Color(0xFF4CAF50)
+                          : (!busRoute.isTripActive
+                                ? (busRoute.tripStatus == 'COMPLETED'
+                                      ? const Color(0xFF4CAF50)
+                                      : Colors.grey)
+                                : (busRoute.isOnTime
+                                      ? const Color(0xFF4CAF50)
+                                      : Colors.red)),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      studentIsBoarded
+                          ? 'Onboarded'
+                          : (!busRoute.isTripActive
+                                ? (busRoute.tripStatus == 'COMPLETED'
+                                      ? 'Completed'
+                                      : 'Not Started')
+                                : (busRoute.isOnTime
+                                      ? 'On Time'
+                                      : 'Delayed')),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: studentIsBoarded
+                            ? const Color(0xFF4CAF50)
+                            : (!busRoute.isTripActive
+                                  ? (busRoute.tripStatus == 'COMPLETED'
+                                        ? const Color(0xFF4CAF50)
+                                        : Colors.grey.shade700)
+                                  : (busRoute.isOnTime
+                                        ? const Color(0xFF4CAF50)
+                                        : Colors.red)),
+                      ),
+                    ),
+                    if (busRoute.isTripActive && busRoute.isReverse) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.brightOrange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'RETURN TRIP',
+                          style: TextStyle(
+                            color: AppColors.brightOrange,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                if (busRoute.isTripActive)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Next: ${busRoute.nextStop}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+        _buildTrackButton(
+          disabled: false,
+          onPressed: () => _selectRouteAndTrack(
+            context,
+            busRoute.busNumber,
+            student.name,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTrackButton({
+    required bool disabled,
+    VoidCallback? onPressed,
+    String label = 'Track Bus',
+    String? tooltip,
+  }) {
+    return SizedBox(
+      height: 40,
+      child: ElevatedButton(
+        onPressed: disabled
+            ? (tooltip != null
+                ? () {
+                    UIHelpers.showErrorTooltip(context, tooltip);
+                  }
+                : null)
+            : onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: disabled ? Colors.grey.shade300 : AppColors.brightOrange,
+          foregroundColor: disabled ? Colors.grey.shade600 : Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          padding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 0,
+          ),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
     );
   }
 

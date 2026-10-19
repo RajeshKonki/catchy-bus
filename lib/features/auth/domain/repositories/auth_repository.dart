@@ -34,5 +34,5 @@ abstract class AuthRepository {
   /// Update notification settings
   Future<Either<Failure, void>> updateNotificationSettings(Map<String, bool> settings);
   /// Check if a phone number exists in the system for the given role
-  Future<bool> checkPhoneInSystem(String phone, String role);
+  Future<Either<Failure, bool>> checkPhoneInSystem(String phone, String role);
 }

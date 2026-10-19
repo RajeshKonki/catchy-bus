@@ -169,7 +169,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                       // Logo
                       Image.asset(
                         'assets/icons/catchy_logo.png',
-                        height: 90,
+                        height: 60,
                         fit: BoxFit.contain,
                       ),
                       const SizedBox(height: 16),
